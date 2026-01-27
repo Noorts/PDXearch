@@ -29,19 +29,27 @@ modern hardware.
 ## Install
 
 > [!WARNING]
-> The extension is in an unstable experimental state. We're actively working on
-> adding features and improving stability. The extension will be made available
-> as a community extension once it's ready.
+> The extension is unstable and experimental. We're actively working on adding
+> features and improving stability. The extension will be made available as a
+> community extension once it's ready. For now the extension has to be built
+> locally.
 
 ### Build
+
+#### Build environment requirements
+
+- We rely on VCPKG to manage part of our dependencies. Follow the instructions
+  [here](https://github.com/duckdb/extension-template?tab=readme-ov-file#managing-dependencies)
+  to make it available on your system.
+- If on MacOS, make sure you have `libomp` installed. You can easily install it
+  with homebrew: `brew install libomp`.
+
+#### Building the extension
 
 ```bash
 # Clone the repo.
 git clone --recurse-submodules https://github.com/Noorts/PDXearch.git
 cd PDXearch
-
-# If on MacOS, make sure you have libomp installed.
-brew install libomp
 
 # Build the extension.
 make
