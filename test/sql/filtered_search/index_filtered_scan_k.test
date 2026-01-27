@@ -1,0 +1,72 @@
+# name: test/sql/filtered_search/index_filtered_scan_k.test
+# description: Verify that the filtered index scan returns the correct number of rows.
+# group: [filtered_search]
+
+# TODO: Update this test to take dynamic n_probe into account. Need to decide on
+# the desired behavior and implement it first.
+
+require pdxearch
+
+# Variables
+test-env DIMS 512
+
+test-env NUM_ROWS 20000
+
+# N_PROBE is set to 0 to ensure an exact search (probing all clusters).
+test-env N_PROBE 0
+
+test-env QUERY_VEC 1000.51
+
+test-env LIMIT 50
+
+# Set up the table and rows ([0, 0, 0, ...], [1, 1, 1, ...], ...).
+statement ok
+CREATE TABLE t1 (id INTEGER, vec FLOAT[${DIMS}]);
+
+statement ok
+INSERT INTO t1 (id, vec) SELECT i as id, repeat([i], ${DIMS}) FROM range(${NUM_ROWS}) t(i);
+
+# Create copy of table without index for verification.
+statement ok
+CREATE TABLE t_no_index AS FROM t1;
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec) WITH (n_probe = ${N_PROBE});
+
+foreach distance_func array_distance
+
+# ============================================
+# LIMIT <= NUM_ROWS_THAT_PASS_FILTER.
+# ============================================
+
+foreach predicate_threshold 50 51 100 500
+
+statement ok
+CREATE OR REPLACE TABLE t2 AS SELECT * FROM t1 WHERE id < ${predicate_threshold}
+    ORDER BY ${distance_func}(vec, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+query I
+SELECT (SELECT COUNT(*) FROM t2) = ${LIMIT};
+----
+true
+
+endloop
+
+# ============================================
+# LIMIT > NUM_ROWS_THAT_PASS_FILTER.
+# ============================================
+
+foreach predicate_threshold 0 1 5 25 49
+
+statement ok
+CREATE OR REPLACE TABLE t2 AS SELECT * FROM t1 WHERE id < ${predicate_threshold}
+    ORDER BY ${distance_func}(vec, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+query I
+SELECT (SELECT COUNT(*) FROM t2) = ${predicate_threshold};
+----
+true
+
+endloop
+
+endloop

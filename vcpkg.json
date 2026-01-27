@@ -1,6 +1,13 @@
 {
         "dependencies": [
-                "openssl"
+                "eigen3",
+                "blas",
+                {
+                        "name": "openblas",
+                        "features": [
+                        ]
+                },
+                "lapack"
         ],
         "vcpkg-configuration": {
                 "overlay-ports": [

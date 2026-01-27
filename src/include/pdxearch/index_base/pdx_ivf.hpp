@@ -1,0 +1,64 @@
+#ifndef PDX_IVF_HPP
+#define PDX_IVF_HPP
+
+#include <cstdint>
+#include <cassert>
+#include <vector>
+#include <memory>
+#include "pdxearch/common.hpp"
+
+namespace PDX {
+
+template <Quantization q>
+class IndexPDXIVF {};
+
+template <>
+class IndexPDXIVF<F32> {
+public:
+	using CLUSTER_TYPE = Cluster<F32>;
+
+	const uint32_t num_dimensions {};
+	const uint64_t total_num_embeddings {};
+	const uint32_t num_clusters {};
+	const uint32_t num_vertical_dimensions {};
+	const uint32_t num_horizontal_dimensions {};
+	std::vector<CLUSTER_TYPE> clusters;
+	const bool is_ivf {};
+	const bool is_normalized {};
+	std::unique_ptr<float[]> means {};
+	std::unique_ptr<float[]> centroids {};
+	float *centroids_pdx {};
+
+	IndexPDXIVF(uint32_t num_dimensions, uint64_t total_num_embeddings, uint32_t num_clusters, bool is_normalized)
+	    : num_dimensions(num_dimensions), total_num_embeddings(total_num_embeddings), num_clusters(num_clusters),
+	      num_vertical_dimensions(
+	          static_cast<uint32_t>(static_cast<float>(num_dimensions) * PDX::PROPORTION_VERTICAL_DIM)),
+	      num_horizontal_dimensions(num_dimensions - num_vertical_dimensions), is_ivf(true),
+	      is_normalized(is_normalized), means(std::make_unique<float[]>(num_dimensions)) {
+		clusters.reserve(num_clusters);
+	}
+};
+
+template <>
+class IndexPDXIVF<U8> {
+public:
+	using CLUSTER_TYPE = Cluster<U8>;
+
+	const uint32_t num_dimensions {};
+	const uint32_t num_clusters {};
+	const uint32_t num_vertical_dimensions {};
+	const uint32_t num_horizontal_dimensions {};
+	std::vector<Cluster<U8>> clusters;
+	const bool is_ivf {};
+	const bool is_normalized {};
+	float *means {};
+	float *centroids {};
+	float *centroids_pdx {};
+
+	float for_base {};
+	float scale_factor {};
+};
+
+} // namespace PDX
+
+#endif // PDX_IVF_HPP

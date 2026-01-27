@@ -1,0 +1,57 @@
+# name: test/sql/filtered_search/index_filtered_scan_k_1.test
+# description: Ensure recall is always 1.0 if only 1 row passes filter.
+# group: [filtered_search]
+
+require pdxearch
+
+# Variables
+test-env DIMS 512
+
+test-env NUM_ROWS 20000
+
+# N_PROBE is set to 0 to ensure an exact search (probing all clusters).
+test-env N_PROBE 0
+
+test-env QUERY_VEC 1000.51
+
+test-env LIMIT 1
+
+# Set up the table and rows ([0, 0, 0, ...], [1, 1, 1, ...], ...).
+statement ok
+CREATE TABLE t1 (id INTEGER, vec FLOAT[${DIMS}]);
+
+statement ok
+INSERT INTO t1 (id, vec) SELECT i as id, repeat([i], ${DIMS}) FROM range(${NUM_ROWS}) t(i);
+
+# Create copy of table without index for verification.
+statement ok
+CREATE TABLE t_no_index AS FROM t1;
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec) WITH (n_probe = ${N_PROBE});
+
+foreach distance_func array_distance
+
+# ============================================
+# Recall is always 1.0 if only 1 row passes filter.
+# ============================================
+
+foreach predicate_id 0 1 5 25 5000 19999
+
+statement ok
+CREATE OR REPLACE TABLE t3 AS (SELECT id FROM t1 WHERE id = ${predicate_id}
+    ORDER BY ${distance_func}(vec, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT});
+
+statement ok
+CREATE OR REPLACE TABLE t4 AS (SELECT id FROM t_no_index WHERE id = ${predicate_id}
+    ORDER BY ${distance_func}(vec, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT})
+
+query I
+SELECT COUNT(*) FROM t3
+    JOIN t4 USING (id);
+----
+1
+
+endloop
+
+endloop

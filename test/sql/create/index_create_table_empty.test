@@ -1,0 +1,28 @@
+# name: test/sql/create/index_create_table_empty.test
+# description: Index creation behavior on empty and on non-empty tables.
+# group: [create]
+
+require pdxearch
+
+# ============================================
+# Empty table
+# ============================================
+statement ok
+CREATE OR REPLACE TABLE t1 (id INTEGER, vec FLOAT[128]);
+
+statement error
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec);
+----
+Binder Error: PDXearch index cannot be created on an empty table.
+
+# ============================================
+# Non-empty table
+# ============================================
+statement ok
+CREATE OR REPLACE TABLE t1 (id INTEGER, vec FLOAT[128]);
+
+statement ok
+INSERT INTO t1 SELECT i + 1 as id, list_transform(range(128), x -> random()) FROM range(100) t(i);
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec);

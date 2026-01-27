@@ -1,0 +1,73 @@
+# name: test/sql/create/index_create_validate_column.test
+# description: Validate the column the index is created over.
+# group: [create]
+
+require pdxearch
+
+# ============================================
+# Invalid create index statement
+# ============================================
+
+statement ok
+CREATE OR REPLACE TABLE t1 (id INTEGER, vec FLOAT[128]);
+
+statement error
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec, id);
+----
+Binder Error: PDXearch indexes can only be created over a single column of keys.
+
+# ============================================
+# Invalid table column type
+# ============================================
+
+statement ok
+CREATE OR REPLACE TABLE t1 (id INTEGER, vec FLOAT);
+
+statement error
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec);
+----
+Binder Error: PDXearch index keys must be of type FLOAT[N]
+
+statement ok
+CREATE OR REPLACE TABLE t1 (id INTEGER, vec DOUBLE[128]);
+
+statement error
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec);
+----
+Binder Error: PDXearch index key type must be FLOAT
+
+# ============================================
+# Valid number of dimensions
+# ============================================
+
+foreach dims 128 4096
+
+statement ok
+CREATE OR REPLACE TABLE t1 (id INTEGER, vec FLOAT[${dims}]);
+
+statement ok
+INSERT INTO t1 SELECT i + 1 as id, list_transform(range(${dims}), x -> random()) FROM range(100) t(i);
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec);
+
+endloop
+
+# ============================================
+# Invalid number of dimensions
+# ============================================
+
+foreach dims 127 129 4097
+
+statement ok
+CREATE OR REPLACE TABLE t1 (id INTEGER, vec FLOAT[${dims}]);
+
+statement ok
+INSERT INTO t1 SELECT i + 1 as id, list_transform(range(${dims}), x -> random()) FROM range(100) t(i);
+
+statement error
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec);
+----
+<REGEX>:Binder Error: PDXearch index FLOAT array length .* must be between .* and .* \(inclusive\), and be divisible by 4, got .*
+
+endloop

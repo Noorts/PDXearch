@@ -1,0 +1,90 @@
+# name: test/sql/search/index_scan_monotonic_recall.test
+# description: The n_probe parameter and recall should have a monotonic relationship. Probing all clusters (n_probe=0) should achieve a high recall.
+# group: [search]
+
+require pdxearch
+
+set seed 0.42
+
+# Variables
+test-env INDEX_SEED 0
+
+test-env DIMS 512
+
+# If you change this, the n_probe foreach loop will need to be updated.
+test-env NUM_ROWS 20000
+
+test-env QUERY_VEC 0.51
+
+test-env LIMIT 50
+
+foreach distance_func array_distance
+
+# Set up the table and rows ([0, 0, 0, ...], [1, 1, 1, ...], ...).
+statement ok
+CREATE OR REPLACE TABLE t1 (id INTEGER, vec FLOAT[${DIMS}]);
+
+statement ok
+INSERT INTO t1 (id, vec) SELECT i as id, list_transform(range(${DIMS}), x -> random()) FROM range(${NUM_ROWS}) t(i);
+
+statement ok
+CREATE OR REPLACE TABLE t_gt AS SELECT * FROM t1 ORDER BY ${distance_func}(vec, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec) WITH (seed = ${INDEX_SEED});
+
+statement ok
+CREATE OR REPLACE TABLE results (n_probe INTEGER, recall FLOAT);
+
+# Note: n_probe=0 will probe all clusters. Realistic values depend on the number
+# of clusters which is a function of NUM_ROWS.
+foreach n_probe 1 2 3 4 5 15 50 100 250 300 0
+
+statement ok
+SET pdxearch_n_probe = ${n_probe};
+
+query II
+EXPLAIN SELECT * FROM t1 ORDER BY ${distance_func}(vec, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_SCAN.*
+
+statement ok
+CREATE OR REPLACE TABLE t_idx_res AS SELECT * FROM t1 ORDER BY ${distance_func}(vec, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+# Verify that the index scan returns the correct number of rows. A low n_probe
+# value paired with a low LIMIT can result in less than LIMIT rows being
+# returned.
+query I
+SELECT COUNT(*) FROM t_idx_res;
+----
+${LIMIT}
+
+# Compute recall for this n_probe.
+statement ok
+INSERT INTO results (n_probe, recall) VALUES (${n_probe},
+    (SELECT COUNT(*) FROM t_gt JOIN t_idx_res USING (id)) / ${LIMIT});
+
+endloop
+
+# Ensure the example scenario does not start with a recall of 1.0.
+query I
+SELECT recall < 1.0 FROM results LIMIT 1;
+----
+true
+
+# Verify that the recall values are monotonically increasing.
+query I
+SELECT bool_and(diff >= 0) FROM (
+  SELECT recall - lag(recall) OVER () as diff FROM results
+) WHERE diff IS NOT NULL;
+----
+true
+
+# Verify that exact search (n_probe=0) achieves a high recall. Not necessarily
+# 1.0 because of float computations and pruning algorithm loss.
+query I
+SELECT 0.95 <= (SELECT recall FROM results WHERE n_probe = 0);
+----
+true
+
+endloop
