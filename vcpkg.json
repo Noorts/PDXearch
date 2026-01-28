@@ -1,13 +1,14 @@
 {
         "dependencies": [
                 "eigen3",
-                "blas",
                 {
                         "name": "openblas",
-                        "features": [
-                        ]
+                        "platform": "!osx"
                 },
-                "lapack"
+                {
+                        "name": "lapack",
+                        "platform": "!osx"
+                }
         ],
         "vcpkg-configuration": {
                 "overlay-ports": [
