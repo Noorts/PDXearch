@@ -2,7 +2,7 @@
   PDXearch Extension
 </h1>
 <h3 align="center">
-  DuckDB extension that adds a state-of-the-art IVF index for lightweight and fast (filtered) vector similarity search.
+  A state-of-the-art IVF index for lightweight but fast (filtered) vector similarity search in DuckDB.
 </h3>
 <br>
 
@@ -19,12 +19,13 @@ table to speed up the vector search queries. Unfortunately, although
 these graph-based indexes deliver fast search, they take up a considerable
 amount of memory and take long to construct.
 
-The PDXearch extension is similarly fast, but requires less memory and is
-significantly faster to construct. This is made possible by the state-of-the-art
-partition-based (IVF) index called [PDXearch](https://github.com/cwida/pdx).
-Furthermore, this extension integrates tightly with DuckDB's internals to
-parallelize across row groups, allowing us to squeeze more performance out of
-modern hardware.
+The PDXearch extension aims to address these drawbacks. It achieves competitive
+search performance, while using less memory and being significantly faster to
+construct. This is made possible by a state-of-the-art partition-based (IVF)
+index. To be precise, we rely on the CWI's [PDX](https://github.com/cwida/pdx)
+data layout and its accompanying search framework called PDXearch. Furthermore,
+this extension integrates tightly with DuckDB's internals to parallelize across
+row groups, allowing us to squeeze more performance out of modern hardware.
 
 ## Install
 
@@ -38,8 +39,7 @@ modern hardware.
 
 #### Build environment requirements
 
-- We rely on VCPKG to manage part of our dependencies. Follow the instructions
-  [here](https://github.com/duckdb/extension-template?tab=readme-ov-file#managing-dependencies)
+- We rely on VCPKG to manage part of our dependencies. Follow the [installation instructions](https://github.com/duckdb/extension-template?tab=readme-ov-file#managing-dependencies)
   to make it available on your system.
 - If on MacOS, make sure you have `libomp` installed. You can easily install it
   with homebrew: `brew install libomp`.
