@@ -3,7 +3,6 @@
 
 #include <cstdint>
 #include <cstdio>
-#include <immintrin.h>
 #include "pdxearch/common.hpp"
 
 namespace PDX {
@@ -26,7 +25,8 @@ public:
 	static void VerticalPruning(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t n_vectors,
 	                            size_t total_vectors, size_t start_dimension, size_t end_dimension,
 	                            DISTANCE_TYPE *distances_p, const uint32_t *pruning_positions = nullptr,
-	                            const uint32_t *indices_dimensions = nullptr, const int32_t *dim_clip_value = nullptr) {
+	                            const uint32_t *indices_dimensions = nullptr, const int32_t *dim_clip_value = nullptr,
+	                            const float *scaling_factors = nullptr) {
 		size_t dimensions_jump_factor = total_vectors;
 		for (size_t dimension_idx = start_dimension; dimension_idx < end_dimension; ++dimension_idx) {
 			uint32_t true_dimension_idx = dimension_idx;
@@ -48,7 +48,7 @@ public:
 
 	// Defer to the scalar kernel
 	static void Vertical(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t start_dimension,
-	                     size_t end_dimension, DISTANCE_TYPE *distances_p) {
+	                     size_t end_dimension, DISTANCE_TYPE *distances_p, const float *scaling_factors = nullptr) {
 		for (size_t dim_idx = start_dimension; dim_idx < end_dimension; dim_idx++) {
 			size_t dimension_idx = dim_idx;
 			size_t offset_to_dimension_start = dimension_idx * PDX_VECTOR_SIZE;
@@ -64,7 +64,7 @@ public:
 	}
 
 	static DISTANCE_TYPE Horizontal(const QUERY_TYPE *__restrict vector1, const DATA_TYPE *__restrict vector2,
-	                                size_t num_dimensions) {
+	                                size_t num_dimensions, const float *scaling_factors = nullptr) {
 		DISTANCE_TYPE distance = 0.0;
 		for (size_t dimension_idx = 0; dimension_idx < num_dimensions; ++dimension_idx) {
 			DISTANCE_TYPE to_multiply = vector1[dimension_idx] - vector2[dimension_idx];
@@ -86,18 +86,19 @@ public:
 	static void VerticalPruning(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t n_vectors,
 	                            size_t total_vectors, size_t start_dimension, size_t end_dimension,
 	                            DISTANCE_TYPE *distances_p, const uint32_t *pruning_positions = nullptr,
-	                            const uint32_t *indices_dimensions = nullptr, const int32_t *dim_clip_value = nullptr) {
+	                            const uint32_t *indices_dimensions = nullptr, const int32_t *dim_clip_value = nullptr,
+	                            const float *scaling_factors = nullptr) {
 		// TODO
 	}
 
 	// Defer to the scalar kernel
 	static void Vertical(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t start_dimension,
-	                     size_t end_dimension, DISTANCE_TYPE *distances_p) {
+	                     size_t end_dimension, DISTANCE_TYPE *distances_p, const float *scaling_factors = nullptr) {
 		// TODO
 	}
 
 	static DISTANCE_TYPE Horizontal(const QUERY_TYPE *__restrict vector1, const DATA_TYPE *__restrict vector2,
-	                                size_t num_dimensions) {
+	                                size_t num_dimensions, const float *scaling_factors = nullptr) {
 		DISTANCE_TYPE distance = 0.0;
 		for (size_t dimension_idx = 0; dimension_idx < num_dimensions; ++dimension_idx) {
 			distance += vector1[dimension_idx] * vector2[dimension_idx];
