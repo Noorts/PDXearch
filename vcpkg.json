@@ -6,7 +6,7 @@
                         "platform": "!osx"
                 },
                 {
-                        "name": "clapack",
+                        "name": "lapack",
                         "platform": "!osx"
                 }
         ],
