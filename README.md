@@ -35,51 +35,47 @@ row groups, allowing us to squeeze more performance out of modern hardware.
 > community extension once it's ready. For now the extension has to be built
 > locally.
 
-### Build
-
-#### Build environment requirements
-
-- We rely on VCPKG to manage part of our dependencies. Follow the [installation instructions](https://github.com/duckdb/extension-template?tab=readme-ov-file#managing-dependencies)
-  to make it available on your system.
-- If on MacOS, make sure you have `libomp` installed. You can easily install it
-  with homebrew: `brew install libomp`.
-
-#### Building the extension
-
-```bash
-# Clone the repo.
-git clone --recurse-submodules https://github.com/Noorts/PDXearch.git
-cd PDXearch
-
-# Build the extension.
-make
-```
+To build the extension locally, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Usage
 
 To create an index and run a search, we provide an interface similar to the
 official VSS extension ([VSS docs](https://duckdb.org/docs/stable/core_extensions/vss)).
 
-```bash
-# Start a DuckDB instance with an in-memory database and allow loading unsigned extensions.
-duckdb -unsigned
-```
+1. Start a DuckDB instance with an in-memory database and allow loading unsigned extensions.
 
-```sql
--- Load by providing a full path to the locally built extension.
-LOAD '<Fill in>/PDXearch/build/release/extension/pdxearch/pdxearch.duckdb_extension';
+    ```bash
+    duckdb -unsigned
+    ```
 
--- Set up table.
-CREATE TABLE t1 (id INTEGER, vec FLOAT[512]);
-INSERT INTO t1 (id, vec) SELECT i as id, repeat([i], 512) FROM range(20000) t(i);
+2. Load the locally built extension by providing a full path to it.
 
--- Create the PDXearch index and set one of the index's options (n_probe).
-CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec) WITH (n_probe = 64);
+    ```sql
+    LOAD '<Fill in>/PDXearch/build/release/extension/pdxearch/pdxearch.duckdb_extension';
+    ```
 
--- Run an approximate filtered vector similarity search where the top 100 rows are returned.
-SELECT * FROM t1 WHERE id < 500
-    ORDER BY array_distance(vec, repeat([1000.51], 512)::FLOAT[512]) LIMIT 100;
-```
+3. Set up a table.
+
+    ```sql
+    CREATE TABLE t1 (id INTEGER, vec FLOAT[512]);
+    ```
+
+    ```sql
+    INSERT INTO t1 (id, vec) SELECT i as id, repeat([i], 512) FROM range(20000) t(i);
+    ```
+
+4. Create the PDXearch index and set one of the index's options (n_probe).
+
+    ```sql
+    CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec) WITH (n_probe = 64);
+    ```
+
+5. Run an approximate filtered vector similarity search where the top 100 rows are returned.
+
+    ```sql
+    SELECT * FROM t1 WHERE id < 500
+        ORDER BY array_distance(vec, repeat([1000.51], 512)::FLOAT[512]) LIMIT 100;
+    ```
 
 ## Limitations
 
