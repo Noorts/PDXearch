@@ -1,8 +1,8 @@
 <h1 align="center">
-  PDXearch Extension
+  The PDXearch DuckDB Extension
 </h1>
 <h3 align="center">
-  A state-of-the-art IVF index for lightweight but fast (filtered) vector similarity search in DuckDB.
+  A state-of-the-art IVF index for lightweight but fast (filtered) vector similarity search.
 </h3>
 <br>
 
