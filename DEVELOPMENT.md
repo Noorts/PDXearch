@@ -65,6 +65,29 @@ The built extension can be found at `PDXearch/build/release/extension/pdxearch/p
 
 For extension usage instructions, please refer to the [README.md](README.md).
 
+### PDXearch variants
+
+The extension's internals have been implemented in two variants. These variants
+both implement index creation, and filtered AND non-filtered search.
+
+**1. Row group**: The first variant creates a separate internal IVF index for each
+row group. This allows the extension to parallelize across row groups, which
+speeds up both the creation of the index and using it for search.
+
+**2. Global**: The second variant uses a single internal IVF index for all
+embeddings in the targeted table column.
+
+From the user's perspective the creation of an index (`CREATE INDEX`) and using
+it for search is the same. The user always interacts with a single database
+index.
+
+You decide which variant to use at compile time. Row group is the default. Build
+the extension with the following argument to use the global variant:
+
+```sh
+EXT_FLAGS="-DPDX_USE_ALTERNATIVE_GLOBAL_VERSION=1" make
+```
+
 ### Miscellaneous commands
 
 ```sh
