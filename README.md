@@ -77,14 +77,23 @@ official VSS extension ([VSS docs](https://duckdb.org/docs/stable/core_extension
         ORDER BY array_distance(vec, repeat([1000.51], 512)::FLOAT[512]) LIMIT 100;
     ```
 
+> [!WARNING]
+> If you're executing (filtered) search queries where `K <= 50`, then please
+> disable DuckDB late materialization optimization by running the following
+> statement prior to your search: `SET late_materialization_max_rows = 0;`. Due
+> to the query's low LIMIT (K), DuckDB will apply a late materialization
+> optimization. Unfortunately, the extension does not handle this case optimally
+> yet, leading to a suboptimal query plan when a `K <= 50` VSS query is
+> optimized. We aim to address this behavior in the near future.
+
 ## Limitations
 
 The extension's functionality is limited, as it is still in early development.
 As mentioned above, we aim to address these limitations soon.
 
 - **No persistence**: The index should only created in in-memory DuckDB
-  databases. For disk-resident databases you'll have manually drop and rebuild
-  an index when you reload a database.
+  databases. For disk-resident databases you'll have to manually drop and
+  rebuild an index when you reload a database.
 
 - **No maintenance**: We currently only support creating an index on static
   collections. This means the index does not yet support updating the index when
