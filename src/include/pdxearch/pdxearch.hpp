@@ -106,12 +106,9 @@ protected:
 	std::unique_ptr<PredicateEvaluator> predicate_evaluator;
 	// End
 
-	std::vector<uint32_t> clusters_indices_l0;
-
 	size_t n_vectors_not_pruned = 0;
 
 	DISTANCES_TYPE pruning_threshold = std::numeric_limits<DISTANCES_TYPE>::max();
-	DistanceType_t<F32> pruning_threshold_l0 = std::numeric_limits<DistanceType_t<F32>>::max();
 
 	// For pruning we do not use tight loops of 64. We know that tight loops bring benefits
 	// to the distance kernels (40% faster), however doing so + PRUNING in the tight block of 64
@@ -123,11 +120,6 @@ protected:
 	alignas(64) uint32_t pruning_positions[MAX_EMBEDDINGS_PER_CLUSTER];
 	Heap<q> *best_k;
 	std::mutex *best_k_mutex;
-
-	alignas(64) DistanceType_t<F32> centroids_distances[PDX_VECTOR_SIZE];
-	alignas(64) DistanceType_t<F32> pruning_distances_l0[MAX_EMBEDDINGS_PER_CLUSTER];
-	alignas(64) uint32_t pruning_positions_l0[MAX_EMBEDDINGS_PER_CLUSTER];
-	std::priority_queue<KNNCandidate<F32>, std::vector<KNNCandidate<F32>>, VectorComparator<F32>> best_k_centroids {};
 
 	void ResetDistancesScalar(size_t n_vectors) {
 		memset((void *)distances, 0, n_vectors * sizeof(DISTANCES_TYPE));
@@ -212,73 +204,6 @@ protected:
 			}
 		}
 	};
-
-	void GetDimensionsAccessOrder(const float *__restrict query, const float *__restrict means) {
-		std::iota(indices_dimensions.begin(), indices_dimensions.end(), 0);
-		if (dimension_order == DISTANCE_TO_MEANS) {
-			std::sort(indices_dimensions.begin(), indices_dimensions.end(), [&query, &means](size_t i1, size_t i2) {
-				return std::abs(query[i1] - means[i1]) > std::abs(query[i2] - means[i2]);
-			});
-		} else if (dimension_order == DISTANCE_TO_MEANS_IMPROVED) {
-			// Improves Cache performance
-			auto const top_perc = static_cast<size_t>(std::floor(indices_dimensions.size() / 4));
-			std::partial_sort(indices_dimensions.begin(), indices_dimensions.begin() + top_perc,
-			                  indices_dimensions.end(), [&query, &means](size_t i1, size_t i2) {
-				                  return std::abs(query[i1] - means[i1]) > std::abs(query[i2] - means[i2]);
-			                  });
-			// By taking the top 25% dimensions and sorting them ascendingly by index
-			std::sort(indices_dimensions.begin(), indices_dimensions.begin() + top_perc);
-			// Then sorting the rest of the dimensions ascendingly by index
-			std::sort(indices_dimensions.begin() + top_perc, indices_dimensions.end());
-		} else if (dimension_order == DIMENSION_ZONES) {
-			uint16_t dimensions = pdx_data.num_dimensions;
-			size_t estimated_embeddings_per_vg = total_embeddings / pdx_data.num_clusters;
-			size_t n_dimensions_per_zone = 8192 / estimated_embeddings_per_vg;
-			size_t total_zones = dimensions / n_dimensions_per_zone;
-			std::vector<std::pair<uint16_t, uint16_t>> zones;
-			std::vector<float> zone_ranking;
-			std::vector<size_t> zones_indexes;
-			zones.resize(total_zones);
-			zones_indexes.resize(total_zones);
-			zone_ranking.resize(total_zones);
-			std::iota(zones_indexes.begin(), zones_indexes.end(), 0);
-			for (size_t i = 0; i < total_zones; i++) {
-				uint16_t start = i * n_dimensions_per_zone;
-				uint16_t end = i * n_dimensions_per_zone + n_dimensions_per_zone;
-				if (end > dimensions - 1) {
-					end = dimensions - 1;
-				}
-				// end = std::min(end, (uint16_t) dimensions - 1);
-				zones[i] = std::pair<uint16_t, uint16_t>(start, end);
-				zone_ranking[i] = 0.0;
-			}
-			for (size_t i = 0; i < total_zones; i++) {
-				uint16_t zone_start = zones[i].first;
-				uint16_t zone_end = zones[i].second;
-				for (size_t d = zone_start; d < zone_end; d++) {
-					zone_ranking[i] += std::abs(query[d] - means[d]);
-				}
-				// Normalizing
-				zone_ranking[i] = zone_ranking[i] / (1.0 * (zone_end - zone_start));
-			}
-			auto const top_perc = static_cast<size_t>(std::ceil(zones.size() / 8));
-
-			std::partial_sort(zones_indexes.begin(), zones_indexes.begin() + top_perc, zones_indexes.end(),
-			                  [&zone_ranking](size_t i1, size_t i2) { return zone_ranking[i1] > zone_ranking[i2]; });
-			// We also prioritize them
-			std::sort(zones_indexes.begin(), zones_indexes.begin() + top_perc);
-			// The rest we resort to access them sequentially by zone
-			std::sort(zones_indexes.begin() + top_perc, zones_indexes.end());
-			size_t offset_tmp = 0;
-			for (size_t i = 0; i < total_zones; i++) {
-				std::pair<uint16_t, uint16_t> priority_zone = zones[zones_indexes[i]];
-				for (size_t d = priority_zone.first; d < priority_zone.second; d++) {
-					indices_dimensions[offset_tmp] = d;
-					offset_tmp += 1;
-				}
-			}
-		}
-	}
 
 	static void GetAllClustersAccessOrderIVF(const float *__restrict query, const INDEX_TYPE &data,
 	                                         std::vector<uint32_t> &clusters_indices) {
