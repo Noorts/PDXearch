@@ -39,26 +39,6 @@ public:
 	}
 };
 
-template <>
-class IndexPDXIVF<U8> {
-public:
-	using CLUSTER_TYPE = Cluster<U8>;
-
-	const uint32_t num_dimensions {};
-	const uint32_t num_clusters {};
-	const uint32_t num_vertical_dimensions {};
-	const uint32_t num_horizontal_dimensions {};
-	std::vector<Cluster<U8>> clusters;
-	const bool is_ivf {};
-	const bool is_normalized {};
-	float *means {};
-	float *centroids {};
-	float *centroids_pdx {};
-
-	float for_base {};
-	float scale_factor {};
-};
-
 } // namespace PDX
 
 #endif // PDX_IVF_HPP
