@@ -23,7 +23,7 @@ The PDXearch extension aims to address these drawbacks. It achieves competitive
 search performance, while using less memory and being significantly faster to
 construct. This is made possible by a state-of-the-art partition-based (IVF)
 index. To be precise, we rely on the CWI's [PDX](https://github.com/cwida/pdx)
-data layout and its accompanying search framework called PDXearch. Furthermore,
+data layout and the accompanying search framework called PDXearch. Furthermore,
 this extension integrates tightly with DuckDB's internals to parallelize across
 row groups, allowing us to squeeze more performance out of modern hardware.
 
@@ -79,7 +79,7 @@ official VSS extension ([VSS docs](https://duckdb.org/docs/stable/core_extension
 
 > [!WARNING]
 > If you're executing (filtered) search queries where `K <= 50`, then please
-> disable DuckDB late materialization optimization by running the following
+> disable DuckDB's late materialization optimization by running the following
 > statement prior to your search: `SET late_materialization_max_rows = 0;`. Due
 > to the query's low LIMIT (K), DuckDB will apply a late materialization
 > optimization. Unfortunately, the extension does not handle this case optimally
