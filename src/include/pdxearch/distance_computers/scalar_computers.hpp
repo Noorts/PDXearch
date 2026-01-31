@@ -11,9 +11,6 @@ template <DistanceFunction alpha, Quantization q>
 class ScalarComputer {};
 
 template <>
-class ScalarComputer<L2, Quantization::U8> {};
-
-template <>
 class ScalarComputer<L2, Quantization::F32> {
 public:
 	using DISTANCE_TYPE = DistanceType_t<F32>;
@@ -69,39 +66,6 @@ public:
 		for (size_t dimension_idx = 0; dimension_idx < num_dimensions; ++dimension_idx) {
 			DISTANCE_TYPE to_multiply = vector1[dimension_idx] - vector2[dimension_idx];
 			distance += to_multiply * to_multiply;
-		}
-		return distance;
-	};
-};
-
-template <>
-class ScalarComputer<IP, Quantization::F32> {
-public:
-	using DISTANCE_TYPE = DistanceType_t<F32>;
-	using QUERY_TYPE = QuantizedVectorType_t<F32>;
-	using DATA_TYPE = DataType_t<F32>;
-
-	// Defer to the scalar kernel
-	template <bool USE_DIMENSIONS_REORDER, bool SKIP_PRUNED>
-	static void VerticalPruning(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t n_vectors,
-	                            size_t total_vectors, size_t start_dimension, size_t end_dimension,
-	                            DISTANCE_TYPE *distances_p, const uint32_t *pruning_positions = nullptr,
-	                            const uint32_t *indices_dimensions = nullptr, const int32_t *dim_clip_value = nullptr,
-	                            const float *scaling_factors = nullptr) {
-		// TODO
-	}
-
-	// Defer to the scalar kernel
-	static void Vertical(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t start_dimension,
-	                     size_t end_dimension, DISTANCE_TYPE *distances_p, const float *scaling_factors = nullptr) {
-		// TODO
-	}
-
-	static DISTANCE_TYPE Horizontal(const QUERY_TYPE *__restrict vector1, const DATA_TYPE *__restrict vector2,
-	                                size_t num_dimensions, const float *scaling_factors = nullptr) {
-		DISTANCE_TYPE distance = 0.0;
-		for (size_t dimension_idx = 0; dimension_idx < num_dimensions; ++dimension_idx) {
-			distance += vector1[dimension_idx] * vector2[dimension_idx];
 		}
 		return distance;
 	};
