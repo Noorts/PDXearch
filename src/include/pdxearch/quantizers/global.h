@@ -51,7 +51,7 @@ public:
 	void PrepareQuery(const float *query, const float for_base, const float scale_factor) {
 		for (size_t i = 0; i < num_dimensions; ++i) {
 			// Scale factor is global in symmetric kernel
-			int rounded = std::round((query[i] - for_base) * scale_factor);
+			int rounded = static_cast<int>(std::round((query[i] - for_base) * scale_factor));
 			dim_clip_value[i] = rounded;
 			if (rounded > MAX_VALUE || rounded < 0) {
 				quantized_query[i] = 0;

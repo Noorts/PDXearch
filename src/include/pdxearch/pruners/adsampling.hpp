@@ -97,11 +97,11 @@ private:
 		if (visited_dimensions == 0) {
 			return 1;
 		}
-		if (visited_dimensions == (int)num_dimensions) {
+		if (visited_dimensions == static_cast<int>(num_dimensions)) {
 			return 1.0;
 		}
-		return 1.0 * visited_dimensions / ((int)num_dimensions) * (1.0 + epsilon0 / std::sqrt(visited_dimensions)) *
-		       (1.0 + epsilon0 / std::sqrt(visited_dimensions));
+		return static_cast<float>(visited_dimensions) / num_dimensions *
+		       (1.0 + epsilon0 / std::sqrt(visited_dimensions)) * (1.0 + epsilon0 / std::sqrt(visited_dimensions));
 	}
 
 	/**

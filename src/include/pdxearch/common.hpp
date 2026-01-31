@@ -1,15 +1,14 @@
 #ifndef PDX_COMMON_HPP
 #define PDX_COMMON_HPP
 
-#include <cinttypes>
 #include <cstdint>
 #include <cstdio>
 #include <queue>
 
 namespace PDX {
 
-static inline float PROPORTION_VERTICAL_DIM = 0.25;
-static inline size_t D_THRESHOLD_FOR_DCT_ROTATION = 512;
+static constexpr float PROPORTION_VERTICAL_DIM = 0.25;
+static constexpr size_t D_THRESHOLD_FOR_DCT_ROTATION = 512;
 static constexpr size_t PDX_VECTOR_SIZE = 64;
 static constexpr size_t PDX_MAX_DIMS = 4096;
 static constexpr size_t PDX_MIN_DIMS = 128;

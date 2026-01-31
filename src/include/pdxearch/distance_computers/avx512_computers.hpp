@@ -159,8 +159,9 @@ public:
 		}
 		__m512 d_vec = _mm512_sub_ps(a_vec, b_vec);
 		d2_vec = _mm512_fmadd_ps(d_vec, d_vec, d2_vec);
-		if (num_dimensions)
+		if (num_dimensions) {
 			goto simsimd_l2sq_f32_skylake_cycle;
+		}
 
 		// _simsimd_reduce_f32x16_skylake
 		__m512 x = _mm512_add_ps(d2_vec, _mm512_shuffle_f32x4(d2_vec, d2_vec, _MM_SHUFFLE(0, 0, 3, 2)));

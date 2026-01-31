@@ -1,6 +1,7 @@
 #ifndef PDX_PDXEARCH_HPP
 #define PDX_PDXEARCH_HPP
 
+#include <numeric>
 #include <queue>
 #include <cassert>
 #include <algorithm>
@@ -60,10 +61,10 @@ public:
 			heap.pop();
 		}
 
-		size_t result_set_size = std::min(heap.size(), (size_t)k);
+		int32_t result_set_size = std::min(heap.size(), (size_t)k);
 		std::vector<KNNCandidate_t> result;
 		result.resize(result_set_size);
-		for (int i = result_set_size - 1; i >= 0; --i) {
+		for (int32_t i = result_set_size - 1; i >= 0; --i) {
 			const KNNCandidate_t &embedding = heap.top();
 			result[i].distance = embedding.distance;
 			result[i].index = embedding.index;
@@ -86,7 +87,7 @@ protected:
 	static constexpr uint32_t DIMENSIONS_FETCHING_SIZES[24] = {
 	    4, 4, 8, 8, 8, 16, 16, 32, 32, 32, 32, 64, 64, 64, 64, 128, 128, 128, 128, 256, 256, 512, 1024, 2048};
 
-	size_t H_DIM_SIZE = 64;
+	static constexpr size_t H_DIM_SIZE = 64;
 
 	size_t cur_subgrouping_size_idx {0};
 	size_t total_embeddings {0};
@@ -230,8 +231,8 @@ protected:
 		}
 		clusters_indices.resize(data.num_clusters);
 		std::iota(clusters_indices.begin(), clusters_indices.end(), 0);
-		std::partial_sort(clusters_indices.begin(), clusters_indices.begin() + nprobe, clusters_indices.end(),
-		                  [&distances_to_centroids](size_t i1, size_t i2) {
+		std::partial_sort(clusters_indices.begin(), clusters_indices.begin() + static_cast<int64_t>(nprobe),
+		                  clusters_indices.end(), [&distances_to_centroids](size_t i1, size_t i2) {
 			                  return distances_to_centroids[i1] < distances_to_centroids[i2];
 		                  });
 	}
@@ -245,11 +246,12 @@ protected:
 	            uint32_t passing_tuples = 0, uint8_t *selection_vector = nullptr) {
 		current_dimension_idx = 0;
 		cur_subgrouping_size_idx = 0;
-		size_t tuples_needed_to_exit = std::ceil(1.0 * tuples_threshold * n_vectors);
+		size_t tuples_needed_to_exit =
+		    static_cast<size_t>(std::ceilf(tuples_threshold * static_cast<float>(n_vectors)));
 		ResetPruningDistances<Q>(n_vectors, pruning_distances);
 		uint32_t n_tuples_to_prune = 0;
 		if constexpr (FILTERED) {
-			float selection_percentage = (passing_tuples / (float)n_vectors);
+			float selection_percentage = (static_cast<float>(passing_tuples) / static_cast<float>(n_vectors));
 			MaskDistancesWithSelectionVector(n_vectors, n_vectors_not_pruned, pruning_positions, pruning_threshold,
 			                                 pruning_distances, selection_vector);
 			if (selection_percentage < 0.20) {
@@ -260,8 +262,7 @@ protected:
 		if (!is_positional_pruning) {
 			GetPruningThreshold<Q>(k, heap, pruning_threshold);
 		}
-		while (1.0 * n_tuples_to_prune < tuples_needed_to_exit &&
-		       current_dimension_idx < pdx_data.num_vertical_dimensions) {
+		while (n_tuples_to_prune < tuples_needed_to_exit && current_dimension_idx < pdx_data.num_vertical_dimensions) {
 			size_t last_dimension_to_fetch =
 			    std::min(current_dimension_idx + DIMENSIONS_FETCHING_SIZES[cur_subgrouping_size_idx],
 			             pdx_data.num_vertical_dimensions);
@@ -478,7 +479,7 @@ public:
 		indices_sorted.resize(n_vectors);
 		std::iota(indices_sorted.begin(), indices_sorted.end(), 0);
 		std::partial_sort(
-		    indices_sorted.begin(), indices_sorted.begin() + max_possible_k, indices_sorted.end(),
+		    indices_sorted.begin(), indices_sorted.begin() + static_cast<int64_t>(max_possible_k), indices_sorted.end(),
 		    [pruning_distances](size_t i1, size_t i2) { return pruning_distances[i1] < pruning_distances[i2]; });
 		// insert first k results into the heap
 		for (size_t idx = 0; idx < max_possible_k; ++idx) {
@@ -499,7 +500,7 @@ public:
 	                   uint8_t *selection_vector, uint32_t passing_tuples) {
 		ResetPruningDistances<Q>(n_vectors, pruning_distances);
 		n_vectors_not_pruned = 0;
-		float selection_percentage = (passing_tuples / (float)n_vectors);
+		float selection_percentage = (static_cast<float>(passing_tuples) / static_cast<float>(n_vectors));
 		InitPositionsArrayFromSelectionVector<Q>(n_vectors, n_vectors_not_pruned, pruning_positions, pruning_threshold,
 		                                         pruning_distances, selection_vector);
 		// Always start with horizontal block, regardless of selectivity
@@ -533,7 +534,7 @@ public:
 		indices_sorted.resize(n_vectors);
 		std::iota(indices_sorted.begin(), indices_sorted.end(), 0);
 		std::partial_sort(
-		    indices_sorted.begin(), indices_sorted.begin() + max_possible_k, indices_sorted.end(),
+		    indices_sorted.begin(), indices_sorted.begin() + static_cast<int64_t>(max_possible_k), indices_sorted.end(),
 		    [pruning_distances](size_t i1, size_t i2) { return pruning_distances[i1] < pruning_distances[i2]; });
 		// insert first k results into the heap
 		for (size_t idx = 0; idx < max_possible_k; ++idx) {
