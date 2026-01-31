@@ -25,16 +25,14 @@ public:
 	std::vector<CLUSTER_TYPE> clusters;
 	const bool is_ivf {};
 	const bool is_normalized {};
-	std::unique_ptr<float[]> means {};
 	std::unique_ptr<float[]> centroids {};
-	float *centroids_pdx {};
 
 	IndexPDXIVF(uint32_t num_dimensions, uint64_t total_num_embeddings, uint32_t num_clusters, bool is_normalized)
 	    : num_dimensions(num_dimensions), total_num_embeddings(total_num_embeddings), num_clusters(num_clusters),
 	      num_vertical_dimensions(
 	          static_cast<uint32_t>(static_cast<float>(num_dimensions) * PDX::PROPORTION_VERTICAL_DIM)),
 	      num_horizontal_dimensions(num_dimensions - num_vertical_dimensions), is_ivf(true),
-	      is_normalized(is_normalized), means(std::make_unique<float[]>(num_dimensions)) {
+	      is_normalized(is_normalized) {
 		clusters.reserve(num_clusters);
 	}
 };
