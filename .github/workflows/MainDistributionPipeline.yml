@@ -20,6 +20,8 @@ jobs:
       ci_tools_version: v1.4.4
       extension_name: pdxearch
       extra_toolchains: "fortran;omp"
+      # Temporarily disabled to focus efforts on macOS and linux stability.
+      exclude_archs: "windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads"
 
   code-quality-check:
     name: Code Quality Check
