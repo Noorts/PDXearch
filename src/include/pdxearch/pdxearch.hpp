@@ -406,6 +406,12 @@ public:
 	}
 
 	void Search(const size_t num_clusters_to_probe) {
+		// Partial precondition check to ensure the state was reset / initialized.
+		assert(best_k);
+		assert(best_k_mutex);
+		assert(k != 0);
+		assert(prepared_query);
+
 		const size_t end_idx = std::min<size_t>(num_clusters_to_probe, cluster_indices_in_access_order.size());
 		for (size_t cluster_idx = 0; cluster_idx < end_idx; ++cluster_idx) {
 			current_cluster_idx = cluster_indices_in_access_order[cluster_idx];
@@ -424,6 +430,13 @@ public:
 	}
 
 	void FilteredSearch(const size_t num_clusters_to_probe) {
+		// Partial precondition check to ensure the state was reset / initialized.
+		assert(best_k);
+		assert(best_k_mutex);
+		assert(k != 0);
+		assert(predicate_evaluator);
+		assert(prepared_query);
+
 		const size_t end_idx = std::min<size_t>(cluster_indices_in_access_order_offset + num_clusters_to_probe,
 		                                        cluster_indices_in_access_order.size());
 		for (; cluster_indices_in_access_order_offset < end_idx; ++cluster_indices_in_access_order_offset) {
