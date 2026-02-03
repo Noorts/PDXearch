@@ -146,7 +146,7 @@ Here we declare a system setup that has successfully built and used the extensio
 Build:
 
 ```sh
-GEN=ninja CC=$HOMEBREW_PREFIX/opt/llvm@18/bin/clang CXX=$HOMEBREW_PREFIX/opt/llvm@18/bin/clang++ EXTRA_CMAKE_ARGS="-DCMAKE_EXPORT_COMPILE_COMMANDS=1" make
+GEN=ninja DISABLE_SANITIZER=1 CC=$HOMEBREW_PREFIX/opt/llvm@18/bin/clang CXX=$HOMEBREW_PREFIX/opt/llvm@18/bin/clang++ EXTRA_CMAKE_ARGS="-DCMAKE_EXPORT_COMPILE_COMMANDS=1" make
 ```
 
 Portable `make format` alternative:
