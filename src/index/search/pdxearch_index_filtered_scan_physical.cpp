@@ -47,6 +47,8 @@ public:
 		auto num_clusters_per_row_group = index.GetNumClustersPerRowGroup();
 		partitions_to_probe_per_row_group_on_first_iteration =
 		    (n_probe == 0 || n_probe > num_clusters_per_row_group) ? num_clusters_per_row_group : n_probe;
+
+		row_group_ids_of_row_groups_with_passing_tuples.reserve(index.GetNumRowGroups());
 	}
 
 	const ClientContext &context;
@@ -72,6 +74,8 @@ public:
 	// number of partitions to probe on the first iteration is determined by n_probe.
 	static constexpr idx_t PARTITIONS_TO_PROBE_PER_ROW_GROUP_PER_FOLLOW_UP_ITERATION = 5;
 	idx_t partitions_per_row_group_probed_thus_far {0};
+	// Tracked so we can avoid probing a row group with no tuples that passed the filter in the follow up iterations.
+	std::vector<idx_t> row_group_ids_of_row_groups_with_passing_tuples;
 	void TryFinalizeSinkPhase(Pipeline &pipeline, Event &event);
 
 	// Row ids of the final result of the filtered search. For these rows, during the Source phase, the projected
@@ -97,6 +101,9 @@ public:
 	// The row ids of the current row group that passed the predicate and were thus emitted by the child operator (e.g.,
 	// sequential scan operator).
 	std::vector<row_t> current_row_group_passing_rowids;
+
+	// Merged into the global state's `row_group_ids_of_row_groups_with_passing_tuples`. See that for more.
+	std::vector<idx_t> row_group_ids_of_row_groups_with_passing_tuples;
 };
 
 unique_ptr<LocalSinkState> PhysicalPDXearchIndexFilteredScan::GetLocalSinkState(ExecutionContext &context) const {
@@ -134,6 +141,8 @@ SinkResultType PhysicalPDXearchIndexFilteredScan::Sink(ExecutionContext &context
 		index.FilteredSearchRowGroup(l_sink.current_row_group_id,
 		                             g_sink.partitions_to_probe_per_row_group_on_first_iteration);
 
+		l_sink.row_group_ids_of_row_groups_with_passing_tuples.push_back(l_sink.current_row_group_id);
+
 		// Clear the local state to process the next rowgroup.
 		l_sink.current_row_group_passing_rowids.clear();
 	}
@@ -161,7 +170,16 @@ SinkCombineResultType PhysicalPDXearchIndexFilteredScan::Combine(ExecutionContex
 		                                          *g_sink.global_heap, g_sink.global_heap_mutex);
 		index.FilteredSearchRowGroup(l_sink.current_row_group_id,
 		                             g_sink.partitions_to_probe_per_row_group_on_first_iteration);
+
+		l_sink.row_group_ids_of_row_groups_with_passing_tuples.push_back(l_sink.current_row_group_id);
 	}
+
+	// Merge this thread's local state into the global sink state.
+	const auto guard = g_sink.Lock();
+	g_sink.row_group_ids_of_row_groups_with_passing_tuples.insert(
+	    g_sink.row_group_ids_of_row_groups_with_passing_tuples.end(),
+	    l_sink.row_group_ids_of_row_groups_with_passing_tuples.begin(),
+	    l_sink.row_group_ids_of_row_groups_with_passing_tuples.end());
 
 	return SinkCombineResultType::FINISHED;
 }
@@ -212,7 +230,7 @@ public:
 		auto &context = pipeline->GetClientContext();
 
 		vector<shared_ptr<Task>> tasks;
-		for (idx_t row_group_id = 0; row_group_id < g_sink.index.GetNumRowGroups(); row_group_id++) {
+		for (const idx_t &row_group_id : g_sink.row_group_ids_of_row_groups_with_passing_tuples) {
 			tasks.push_back(make_uniq<PhysicalFilteredScanSearchIterationTask>(shared_from_this(), context, g_sink,
 			                                                                   g_sink.op, row_group_id));
 		}

@@ -1,0 +1,46 @@
+# name: test/sql/filtered_search/index_filtered_scan_no_passing_tuples.test
+# description: Ensure no crash occurs during a filtered search if an entire row group's tuples are filtered out and the iteration mechanism is used.
+# group: [filtered_search]
+
+require pdxearch
+
+# Variables
+test-env ROW_GROUP_SIZE 122880
+
+test-env DIMS 512
+
+test-env N_PROBE 1
+
+test-env QUERY_VEC 1000.51
+
+test-env LIMIT 50
+
+# Set up the table and rows ([0, 0, 0, ...], [1, 1, 1, ...], ...).
+statement ok
+CREATE TABLE t1 (id INTEGER, vec FLOAT[${DIMS}]);
+
+# Insert two row groups.
+statement ok
+INSERT INTO t1 (id, vec) SELECT i as id, repeat([i], ${DIMS}) FROM range(${ROW_GROUP_SIZE} * 2) t(i);
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec) WITH (n_probe = ${N_PROBE});
+
+query I
+SELECT COUNT(*) FROM t1;
+----
+245760
+
+query I
+SELECT COUNT(*) FROM t1 WHERE id > (${ROW_GROUP_SIZE} + ${ROW_GROUP_SIZE} - 10);
+----
+9
+
+foreach distance_func array_distance
+
+# Trigger the iteration mechanism by ensuring < K (9 in this case) tuples enter the heap in the first iteration.
+statement ok
+SELECT * FROM t1 WHERE id > (${ROW_GROUP_SIZE} + ${ROW_GROUP_SIZE} - 10)
+    ORDER BY ${distance_func}(vec, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+endloop
