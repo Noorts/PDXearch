@@ -118,6 +118,14 @@ public:
 	PDXearchWrapperF32(PDX::DistanceFunction distance_function, bool is_normalized, uint32_t num_dimensions,
 	                   uint32_t n_probe, int32_t seed, idx_t estimated_cardinality)
 	    : PDXearchWrapper(PDX::Quantization::F32, distance_function, is_normalized, num_dimensions, n_probe, seed) {
+		if (estimated_cardinality == 0) {
+			throw InternalException(
+			    "Something went wrong: estimated_cardinality is 0. This is likely because a malformed persisted index "
+			    "was loaded. Index persistence is not supported yet, but DuckDB will still try to persist it. Open "
+			    "your database file manually (duckdb test.db) and drop the index(es). Run 'SELECT sql FROM "
+			    "duckdb_indexes();' to see the indexes, and then 'DROP INDEX index_name;' to drop the unused "
+			    "index(es).");
+		}
 		const idx_t estimated_num_row_groups =
 		    static_cast<idx_t>(std::ceil((float)estimated_cardinality / DEFAULT_ROW_GROUP_SIZE));
 		D_ASSERT(estimated_num_row_groups > 0);
