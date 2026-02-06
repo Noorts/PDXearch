@@ -34,6 +34,9 @@ set(FAISS_ENABLE_PYTHON OFF)
 set(BUILD_TESTING OFF)
 add_subdirectory(third_party/faiss)
 
+# SuperKMeans is a header-only library.
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/SuperKMeans/include)
+
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
