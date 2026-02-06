@@ -4,6 +4,7 @@
 #include <vector>
 #include "faiss/IndexIVFFlat.h"
 #include "faiss/IndexFlat.h"
+#include "superkmeans/superkmeans.h"
 
 namespace duckdb {
 
@@ -27,8 +28,8 @@ struct KMeansResult {
 };
 
 // Compute centroids (clusters) and centroid-to-embedding assignments using FAISS.
-[[nodiscard]] inline KMeansResult ComputeKMeans(const float *const embeddings, const uint64_t num_embeddings,
-                                                const uint32_t num_dimensions, const uint32_t num_clusters) {
+[[nodiscard]] inline KMeansResult ComputeKMeansFAISS(const float *const embeddings, const uint64_t num_embeddings,
+                                                     const uint32_t num_dimensions, const uint32_t num_clusters) {
 	D_ASSERT(num_embeddings >= 1);
 	D_ASSERT(num_dimensions >= 1);
 	D_ASSERT(num_clusters >= 1);
@@ -71,6 +72,36 @@ struct KMeansResult {
 		}
 
 		faiss_index.invlists->release_ids(cluster_idx, faiss_ids);
+	}
+
+	return result;
+};
+
+// Compute centroids (clusters) and centroid-to-embedding assignments using SuperKMeans.
+[[nodiscard]] inline KMeansResult ComputeKMeans(const float *const embeddings, const uint64_t num_embeddings,
+                                                const uint32_t num_dimensions, const uint32_t num_clusters) {
+	D_ASSERT(num_embeddings >= 1);
+	D_ASSERT(num_dimensions >= 1);
+	D_ASSERT(num_clusters >= 1);
+
+	auto result = KMeansResult(num_dimensions, num_clusters);
+
+	// Compute centroids
+	skmeans::SuperKMeansConfig config;
+	config.sampling_fraction = 1.0f;
+	auto kmeans = skmeans::SuperKMeans(num_clusters, num_dimensions, config);
+	std::vector<float> centroids = kmeans.Train(embeddings, num_embeddings);
+
+	// Extract centroids
+	std::memcpy(result.centroids.get(), centroids.data(), centroids.size() * sizeof(float));
+
+	// Extract assignments
+	// SuperKMeans returns assignment from vec_id (not row_id) to centroid_idx
+	std::vector<uint32_t> assignments = kmeans.Assign(embeddings, centroids.data(), num_embeddings, num_clusters);
+	// Convert into assignment from centroid_idx to vec_id (not row_id)
+	result.assignments.resize(num_clusters);
+	for (uint64_t vec_id = 0; vec_id < num_embeddings; vec_id++) {
+		result.assignments[assignments[vec_id]].emplace_back(vec_id);
 	}
 
 	return result;

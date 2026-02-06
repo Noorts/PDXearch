@@ -27,6 +27,17 @@ set(FAISS_ENABLE_PYTHON OFF)
 set(BUILD_TESTING OFF)
 add_subdirectory(third_party/faiss)
 
+# Symlink for Eigen library to avoid changing SuperKMeans includes from <Eigen/Eigen/Dense> to <Eigen/Dense>.
+get_target_property(EIGEN3_INCLUDE_DIRS Eigen3::Eigen INTERFACE_INCLUDE_DIRECTORIES)
+list(GET EIGEN3_INCLUDE_DIRS 0 EIGEN3_INCLUDE_DIR)
+set(EIGEN_SUPERKMEANS_DIR "${CMAKE_CURRENT_BINARY_DIR}/eigen_superkmeans/Eigen")
+file(MAKE_DIRECTORY "${EIGEN_SUPERKMEANS_DIR}")
+file(CREATE_LINK "${EIGEN3_INCLUDE_DIR}/Eigen" "${EIGEN_SUPERKMEANS_DIR}/Eigen" SYMBOLIC)
+include_directories("${CMAKE_CURRENT_BINARY_DIR}/eigen_superkmeans")
+
+# SuperKMeans is a header-only library.
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/SuperKMeans/include)
+
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
