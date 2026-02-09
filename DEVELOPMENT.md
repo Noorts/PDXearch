@@ -27,10 +27,10 @@ a variety of ways, including being copied in (PDXearch headers; AKA vendoring), 
     export VCPKG_TOOLCHAIN_PATH=`pwd`/vcpkg/scripts/buildsystems/vcpkg.cmake
     ```
 
-3. On macOS make sure you have `libomp` installed (for OpenMP):
+3. On macOS make sure you have `pkg-config` (for vcpkg) and `libomp` (for OpenMP) installed:
 
     ```sh
-    brew install libomp
+    brew install pkg-config libomp
     ```
 
     Note: You might have to set `OpenMP_ROOT` in your `.zshrc` file.
