@@ -24,7 +24,7 @@ statement ok
 CREATE OR REPLACE TABLE t1 (id INTEGER, emb FLOAT[128]);
 
 statement ok
-INSERT INTO t1 FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') LIMIT 100;
+INSERT INTO t1 FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') LIMIT 10000;
 
 statement ok
 CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb);
