@@ -19,6 +19,11 @@ public:
 		for (size_t i = 0; i < num_dimensions; ++i) {
 			sum += src[i] * src[i];
 		}
+
+		if (sum == 0.0f) {
+			return;
+		}
+
 		float norm = std::sqrt(sum);
 		for (size_t i = 0; i < num_dimensions; ++i) {
 			out[i] = src[i] / norm;
