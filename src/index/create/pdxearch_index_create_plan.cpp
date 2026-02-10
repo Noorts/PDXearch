@@ -60,17 +60,6 @@ PhysicalOperator &PDXearchIndex::CreatePlan(PlanIndexInput &input) {
 				throw BinderException("PDXearch index 'n_probe' must be at least 0, default is %d",
 				                      PDXearchWrapper::DEFAULT_N_PROBE);
 			}
-		} else if (StringUtil::CIEquals(k, "normalize")) {
-			if (v.type() != LogicalType::INTEGER) {
-				throw BinderException("PDXearch index 'normalize' must be an integer");
-			}
-			if (v.GetValue<int32_t>() != 0 && v.GetValue<int32_t>() != 1) {
-				throw BinderException("PDXearch index 'normalize' must be 1 (true) or 0 (false), default is %s",
-				                      PDXearchWrapper::DEFAULT_NORMALIZE_ENABLED ? "true" : "false");
-			}
-			if (v.GetValue<int32_t>() == 1) {
-				throw NotImplementedException("Normalization is not supported yet.");
-			}
 		} else if (StringUtil::CIEquals(k, "seed")) {
 			if (v.type() != LogicalType::INTEGER) {
 				throw BinderException("PDXearch index 'seed' must be between -2147483647 and 2147483647, inclusive");

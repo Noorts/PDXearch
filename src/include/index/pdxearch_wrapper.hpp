@@ -22,7 +22,6 @@ public:
 	static constexpr float EPSILON0 = 1.5;
 	static constexpr PDX::DistanceMetric DEFAULT_DISTANCE_METRIC = PDX::DistanceMetric::L2SQ;
 	static constexpr PDX::Quantization DEFAULT_QUANTIZATION = PDX::Quantization::F32;
-	static constexpr bool DEFAULT_NORMALIZE_ENABLED = false;
 	static constexpr int32_t DEFAULT_N_PROBE = 128;
 
 private:

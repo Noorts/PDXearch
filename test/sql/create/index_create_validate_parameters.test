@@ -17,7 +17,7 @@ INSERT INTO t1 FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet'
 # ============================================
 
 statement ok
-CREATE INDEX idx ON t1 USING PDXEARCH (emb) WITH (metric = 'l2sq', quantization = 'f32', n_probe = 128, normalize = 0, seed = 0);
+CREATE INDEX idx ON t1 USING PDXEARCH (emb) WITH (metric = 'l2sq', quantization = 'f32', n_probe = 128, seed = 0);
 
 statement ok
 DROP INDEX IF EXISTS idx;
@@ -95,46 +95,6 @@ CREATE INDEX idx ON t1 USING PDXEARCH (emb) WITH (n_probe = ${valid_n_probe});
 
 statement ok
 DROP INDEX IF EXISTS idx;
-
-endloop
-
-# ============================================
-# Parameter: normalize
-# ============================================
-
-statement error
-CREATE INDEX idx ON t1 USING PDXEARCH (emb) WITH (normalize = 'test');
-----
-Binder Error: PDXearch index 'normalize' must be an integer
-
-foreach invalid_normalize 2 -1
-
-statement error
-CREATE INDEX idx ON t1 USING PDXEARCH (emb) WITH (normalize = ${invalid_normalize});
-----
-<REGEX>:Binder Error: PDXearch index 'normalize' must be 1 \(true\) or 0 \(false\), default is .*
-
-endloop
-
-statement error
-CREATE INDEX idx ON t1 USING PDXEARCH (emb) WITH (normalize = 1);
-----
-Not implemented Error: Normalization is not supported yet.
-
-statement ok
-CREATE INDEX idx ON t1 USING PDXEARCH (emb) WITH (normalize = 0);
-
-statement ok
-DROP INDEX IF EXISTS idx;
-
-# TODO: Adjust once support for normalization is reimplemented.
-# foreach valid_normalize 0 1
-
-# statement ok
-# CREATE INDEX idx ON t1 USING PDXEARCH (emb) WITH (normalize = ${valid_normalize});
-
-# statement ok
-# DROP INDEX IF EXISTS idx;
 
 endloop
 

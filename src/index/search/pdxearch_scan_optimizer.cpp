@@ -68,15 +68,15 @@ namespace duckdb {
  * │     [1.0, 2.0, 3.0])      │        │    ────────────────────   │
  * │                           │        │        Table: table       │
  * │      ~1,000,000 rows      │        │    PDXearch Index: idx    │
- * └─────────────┬─────────────┘        │     Normalized: false     │
- * ┌─────────────┴─────────────┐        │       Clusters: 4000      │
- * │          SEQ_SCAN         │        │                           │
- * │    ────────────────────   │        │        Projections:       │
- * │        Table: table       │        │             id            │
- * │   Type: Sequential Scan   │        │            vec            │
- * │                           │        │                           │
- * │        Projections:       │        │      ~1,000,000 rows      │
- * │             id            │        └───────────────────────────┘
+ * └─────────────┬─────────────┘        │       Clusters: 4000      │
+ * ┌─────────────┴─────────────┐        │                           │
+ * │          SEQ_SCAN         │        │        Projections:       │
+ * │    ────────────────────   │        │             id            │
+ * │        Table: table       │        │            vec            │
+ * │   Type: Sequential Scan   │        │                           │
+ * │                           │        │      ~1,000,000 rows      │
+ * │        Projections:       │        └───────────────────────────┘
+ * │             id            │
  * │            vec            │
  * │                           │
  * │      ~1,000,000 rows      │
@@ -124,22 +124,21 @@ namespace duckdb {
  * │     [1.0, 2.0, 3.0])      │        │    ────────────────────   │
  * │                           │        │        Table: table       │
  * │      ~1,000,000 rows      │        │    PDXearch Index: idx    │
- * └─────────────┬─────────────┘        │     Normalized: false     │
- * ┌─────────────┴─────────────┐        │       Clusters: 4000      │
- * │          SEQ_SCAN         │        │                           │
- * │    ────────────────────   │        │        Projections:       │
- * │        Table: table       │        │             id            │
- * │   Type: Sequential Scan   │        │            vec            │
- * │                           │        │                           │
- * │        Projections:       │        │      ~1,000,000 rows      │
- * │             id            │        └─────────────┬─────────────┘
- * │            vec            │        ┌─────────────┴─────────────┐
- * │                           │        │          SEQ_SCAN         │
- * │       Filters: id>50      │        │    ────────────────────   │
- * │                           │        │        Table: table       │
- * │      ~1,000,000 rows      │        │   Type: Sequential Scan   │
- * └───────────────────────────┘        │                           │
- *                                      │        Projections:       │
+ * └─────────────┬─────────────┘        │       Clusters: 4000      │
+ * ┌─────────────┴─────────────┐        │                           │
+ * │          SEQ_SCAN         │        │        Projections:       │
+ * │    ────────────────────   │        │             id            │
+ * │        Table: table       │        │            vec            │
+ * │   Type: Sequential Scan   │        │                           │
+ * │                           │        │      ~1,000,000 rows      │
+ * │        Projections:       │        └─────────────┬─────────────┘
+ * │             id            │        ┌─────────────┴─────────────┐
+ * │            vec            │        │          SEQ_SCAN         │
+ * │                           │        │    ────────────────────   │
+ * │       Filters: id>50      │        │        Table: table       │
+ * │                           │        │   Type: Sequential Scan   │
+ * │      ~1,000,000 rows      │        │                           │
+ * └───────────────────────────┘        │        Projections:       │
  *                                      │           rowid           │
  *                                      │                           │
  *                                      │       Filters: id>50      │

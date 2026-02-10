@@ -88,7 +88,6 @@ static InsertionOrderPreservingMap<string> PDXearchIndexScanToString(TableFuncti
 
 	result["Table"] = bind_data.table.name;
 	result["PDXearch Index"] = bind_data.index.GetIndexName();
-	result["Normalized"] = pdxearch_index.IsNormalized() ? "true" : "false";
 	result["Clusters"] = StringUtil::Format("%zu", pdxearch_index.GetNumClusters());
 
 	return result;
