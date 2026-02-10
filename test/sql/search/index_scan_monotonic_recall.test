@@ -22,16 +22,16 @@ foreach distance_func array_distance
 
 # Set up the table and rows ([0, 0, 0, ...], [1, 1, 1, ...], ...).
 statement ok
-CREATE OR REPLACE TABLE t1 (id INTEGER, vec FLOAT[${DIMS}]);
+CREATE OR REPLACE TABLE t1 (id INTEGER, emb FLOAT[${DIMS}]);
 
 statement ok
-INSERT INTO t1 (id, vec) SELECT i as id, list_transform(range(${DIMS}), x -> random()) FROM range(${NUM_ROWS}) t(i);
+INSERT INTO t1 (id, emb) SELECT i as id, list_transform(range(${DIMS}), x -> random()) FROM range(${NUM_ROWS}) t(i);
 
 statement ok
-CREATE OR REPLACE TABLE t_gt AS SELECT * FROM t1 ORDER BY ${distance_func}(vec, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+CREATE OR REPLACE TABLE t_gt AS SELECT * FROM t1 ORDER BY ${distance_func}(emb, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
 
 statement ok
-CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec) WITH (seed = ${INDEX_SEED});
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (seed = ${INDEX_SEED});
 
 statement ok
 CREATE OR REPLACE TABLE results (n_probe INTEGER, recall FLOAT);
@@ -44,12 +44,12 @@ statement ok
 SET pdxearch_n_probe = ${n_probe};
 
 query II
-EXPLAIN SELECT * FROM t1 ORDER BY ${distance_func}(vec, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+EXPLAIN SELECT * FROM t1 ORDER BY ${distance_func}(emb, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
 ----
 physical_plan	<REGEX>:.*PDXEARCH_INDEX_SCAN.*
 
 statement ok
-CREATE OR REPLACE TABLE t_idx_res AS SELECT * FROM t1 ORDER BY ${distance_func}(vec, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+CREATE OR REPLACE TABLE t_idx_res AS SELECT * FROM t1 ORDER BY ${distance_func}(emb, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
 
 # Verify that the index scan returns the correct number of rows. A low n_probe
 # value paired with a low LIMIT can result in less than LIMIT rows being

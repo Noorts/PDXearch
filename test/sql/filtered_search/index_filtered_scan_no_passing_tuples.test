@@ -17,14 +17,14 @@ test-env LIMIT 50
 
 # Set up the table and rows ([0, 0, 0, ...], [1, 1, 1, ...], ...).
 statement ok
-CREATE TABLE t1 (id INTEGER, vec FLOAT[${DIMS}]);
+CREATE TABLE t1 (id INTEGER, emb FLOAT[${DIMS}]);
 
 # Insert two row groups.
 statement ok
-INSERT INTO t1 (id, vec) SELECT i as id, repeat([i], ${DIMS}) FROM range(${ROW_GROUP_SIZE} * 2) t(i);
+INSERT INTO t1 (id, emb) SELECT i as id, repeat([i], ${DIMS}) FROM range(${ROW_GROUP_SIZE} * 2) t(i);
 
 statement ok
-CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec) WITH (n_probe = ${N_PROBE});
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (n_probe = ${N_PROBE});
 
 query I
 SELECT COUNT(*) FROM t1;
@@ -41,6 +41,6 @@ foreach distance_func array_distance
 # Trigger the iteration mechanism by ensuring < K (9 in this case) tuples enter the heap in the first iteration.
 statement ok
 SELECT * FROM t1 WHERE id > (${ROW_GROUP_SIZE} + ${ROW_GROUP_SIZE} - 10)
-    ORDER BY ${distance_func}(vec, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+    ORDER BY ${distance_func}(emb, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
 
 endloop
