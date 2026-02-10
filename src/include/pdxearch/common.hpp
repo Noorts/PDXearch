@@ -155,6 +155,8 @@ struct PDXDimensionSplit {
 		v_dims = num_dimensions - h_dims;
 	}
 
+	assert(h_dims + v_dims == num_dimensions);
+
 	return {h_dims, v_dims};
 };
 
