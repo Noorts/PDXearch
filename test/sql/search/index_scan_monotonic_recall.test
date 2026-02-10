@@ -2,33 +2,33 @@
 # description: The n_probe parameter and recall should have a monotonic relationship. Probing all clusters (n_probe=0) should achieve a high recall.
 # group: [search]
 
-require pdxearch
+require parquet
 
-set seed 0.42
+require pdxearch
 
 # Variables
 test-env INDEX_SEED 0
 
-test-env DIMS 512
+test-env DIMS 128
 
 # If you change this, the n_probe foreach loop will need to be updated.
 test-env NUM_ROWS 20000
 
-test-env QUERY_VEC 0.51
+test-env QUERY_EMB [0,16,35,5,32,31,14,10,11,78,55,10,45,83,11,6,14,57,102,75,20,8,3,5,67,17,19,26,5,0,1,22,60,26,7,1,18,22,84,53,85,119,119,4,24,18,7,7,1,81,106,102,72,30,6,0,9,1,9,119,72,1,4,33,119,29,6,1,0,1,14,52,119,30,3,0,0,55,92,111,2,5,4,9,22,89,96,14,1,0,1,82,59,16,20,5,25,14,11,4,0,0,1,26,47,23,4,0,0,4,38,83,30,14,9,4,9,17,23,41,0,0,2,8,19,25,23,1]
 
 test-env LIMIT 50
 
 foreach distance_func array_distance
 
-# Set up the table and rows ([0, 0, 0, ...], [1, 1, 1, ...], ...).
+# Set up the table and rows.
 statement ok
 CREATE OR REPLACE TABLE t1 (id INTEGER, emb FLOAT[${DIMS}]);
 
 statement ok
-INSERT INTO t1 (id, emb) SELECT i as id, list_transform(range(${DIMS}), x -> random()) FROM range(${NUM_ROWS}) t(i);
+INSERT INTO t1 FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') LIMIT ${NUM_ROWS};
 
 statement ok
-CREATE OR REPLACE TABLE t_gt AS SELECT * FROM t1 ORDER BY ${distance_func}(emb, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+CREATE OR REPLACE TABLE t_gt AS SELECT * FROM t1 ORDER BY ${distance_func}(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
 
 statement ok
 CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (seed = ${INDEX_SEED});
@@ -44,12 +44,12 @@ statement ok
 SET pdxearch_n_probe = ${n_probe};
 
 query II
-EXPLAIN SELECT * FROM t1 ORDER BY ${distance_func}(emb, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+EXPLAIN SELECT * FROM t1 ORDER BY ${distance_func}(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
 ----
 physical_plan	<REGEX>:.*PDXEARCH_INDEX_SCAN.*
 
 statement ok
-CREATE OR REPLACE TABLE t_idx_res AS SELECT * FROM t1 ORDER BY ${distance_func}(emb, repeat([${QUERY_VEC}], ${DIMS})::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+CREATE OR REPLACE TABLE t_idx_res AS SELECT * FROM t1 ORDER BY ${distance_func}(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
 
 # Verify that the index scan returns the correct number of rows. A low n_probe
 # value paired with a low LIMIT can result in less than LIMIT rows being
