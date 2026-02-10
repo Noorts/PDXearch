@@ -25,9 +25,6 @@ CREATE TABLE t1 (id INTEGER, emb FLOAT[${DIMS}]);
 statement ok
 INSERT INTO t1 FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') LIMIT ${ROW_GROUP_SIZE} * 2;
 
-statement ok
-CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (n_probe = ${N_PROBE});
-
 query I
 SELECT COUNT(*) FROM t1;
 ----
@@ -38,7 +35,13 @@ SELECT COUNT(*) FROM t1 WHERE id > (${ROW_GROUP_SIZE} + ${ROW_GROUP_SIZE} - 10);
 ----
 9
 
-foreach distance_func array_distance
+foreach metric_name,distance_func l2sq,array_distance cosine,array_cosine_distance ip,array_negative_inner_product
+
+statement ok
+DROP INDEX IF EXISTS t1_idx;
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (metric = '${metric_name}', n_probe = ${N_PROBE});
 
 # Trigger the iteration mechanism by ensuring < K (9 in this case) tuples enter the heap in the first iteration.
 # The search will conclude once all partitions have been probed (this is done in multiple iterations).
