@@ -4,6 +4,7 @@
 #include <vector>
 #include "faiss/IndexIVFFlat.h"
 #include "faiss/IndexFlat.h"
+#include "pdxearch/common.hpp"
 
 namespace duckdb {
 
@@ -28,7 +29,8 @@ struct KMeansResult {
 
 // Compute centroids (clusters) and centroid-to-embedding assignments using FAISS.
 [[nodiscard]] inline KMeansResult ComputeKMeans(const float *const embeddings, const uint64_t num_embeddings,
-                                                const uint32_t num_dimensions, const uint32_t num_clusters) {
+                                                const uint32_t num_dimensions, const uint32_t num_clusters,
+                                                const PDX::DistanceMetric distance_metric) {
 	D_ASSERT(num_embeddings >= 1);
 	D_ASSERT(num_dimensions >= 1);
 	D_ASSERT(num_clusters >= 1);
@@ -44,6 +46,9 @@ struct KMeansResult {
 		    static_cast<int>(std::ceil((SAMPLING_RATIO * static_cast<double>(num_embeddings)) / num_clusters));
 		faiss_index.cp.max_points_per_centroid = max_embeddings_per_centroid;
 	}
+
+	faiss_index.cp.spherical =
+	    distance_metric == PDX::DistanceMetric::COSINE || distance_metric == PDX::DistanceMetric::IP;
 
 	// Compute centroids and assignments
 	D_ASSERT(!faiss_index.is_trained);

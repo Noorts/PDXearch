@@ -41,6 +41,7 @@ public:
 		                                        op.info->options, IndexStorageInfo(), op.estimated_cardinality);
 		embedding_preprocessor = make_uniq<EmbeddingPreprocessor>(
 		    num_dimensions, global_index->Cast<PDXearchIndex>().GetRotationMatrix(), PDXearchWrapper::EPSILON0);
+		is_normalized = global_index->Cast<PDXearchIndex>().IsNormalized();
 	}
 	unique_ptr<BoundIndex> global_index;
 
@@ -52,6 +53,7 @@ public:
 	unique_ptr<row_t[]> row_ids;
 
 	unique_ptr<EmbeddingPreprocessor> embedding_preprocessor;
+	bool is_normalized {false};
 };
 
 unique_ptr<GlobalSinkState> PhysicalCreateGlobalPDXearchIndex::GetGlobalSinkState(ClientContext &context) const {
@@ -64,7 +66,7 @@ SinkResultType PhysicalCreateGlobalPDXearchIndex::Sink(ExecutionContext &context
 
 	// Validate input chunk structure.
 	D_ASSERT(input_chunk.ColumnCount() == 2);
-	const auto &embedding_column = input_chunk.data[0];
+	auto &embedding_column = input_chunk.data[0];
 	auto &row_id_column = input_chunk.data[1];
 	D_ASSERT(embedding_column.GetType().id() == LogicalTypeId::ARRAY);
 	D_ASSERT(ArrayType::GetSize(embedding_column.GetType()) == g_sink.num_dimensions);
@@ -76,7 +78,8 @@ SinkResultType PhysicalCreateGlobalPDXearchIndex::Sink(ExecutionContext &context
 
 	g_sink.embedding_preprocessor->PreprocessEmbeddings(
 	    FlatVector::GetData<float>(ArrayVector::GetEntry(embedding_column)),
-	    g_sink.embeddings.get() + (g_sink.current_embedding_count * g_sink.num_dimensions), num_embeddings);
+	    g_sink.embeddings.get() + (g_sink.current_embedding_count * g_sink.num_dimensions), num_embeddings,
+	    g_sink.is_normalized);
 
 	row_id_column.Flatten(num_embeddings);
 	const auto row_id_data = FlatVector::GetData<row_t>(row_id_column);

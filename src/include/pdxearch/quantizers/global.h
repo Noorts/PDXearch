@@ -14,7 +14,7 @@ public:
 	virtual ~Quantizer() = default;
 
 public:
-	void NormalizeQuery(const float *src, float *out) {
+	void NormalizeQuery(const float *src, float *out) const {
 		float sum = 0.0f;
 		for (size_t i = 0; i < num_dimensions; ++i) {
 			sum += src[i] * src[i];

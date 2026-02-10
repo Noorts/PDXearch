@@ -104,22 +104,39 @@ private:
 	PDX::ADSamplingPruner<PDX::F32> pruner;
 	// For normalization.
 	PDX::Quantizer quantizer;
+	const size_t num_dimensions;
 
 public:
 	explicit EmbeddingPreprocessor(const size_t num_dimensions, const float *const rotation_matrix,
 	                               const float epsilon0)
-	    : pruner(num_dimensions, epsilon0, rotation_matrix), quantizer() {
+	    : pruner(num_dimensions, epsilon0, rotation_matrix), quantizer(), num_dimensions(num_dimensions) {
 		quantizer.SetD(num_dimensions);
 	}
 
-	void PreprocessEmbedding(const float *const input_embedding, float *const output_embedding) const {
+	// Warning: modifies the input_embedding.
+	void PreprocessEmbedding(float *const input_embedding, float *const output_embedding, const bool normalize) const {
+		// In-place normalization.
+		if (normalize) {
+			quantizer.NormalizeQuery(input_embedding, input_embedding);
+		}
 		pruner.PreprocessQuery(input_embedding, output_embedding);
 	}
 
-	void PreprocessEmbeddings(const float *const input_embeddings, float *const output_embeddings,
-	                          const size_t num_embeddings) const {
+	// Warning: modifies the input_embeddings.
+	void PreprocessEmbeddings(float *const input_embeddings, float *const output_embeddings,
+	                          const size_t num_embeddings, const bool normalize) const {
+		// In-place normalization.
+		if (normalize) {
+			for (size_t i = 0; i < num_embeddings; i++) {
+				quantizer.NormalizeQuery(input_embeddings + i * num_dimensions, input_embeddings + i * num_dimensions);
+			}
+		}
 		pruner.PreprocessEmbeddings(input_embeddings, output_embeddings, num_embeddings);
 	}
 };
+
+[[nodiscard]] inline constexpr bool DistanceMetricRequiresNormalization(const PDX::DistanceMetric distance_metric) {
+	return distance_metric == PDX::DistanceMetric::COSINE || distance_metric == PDX::DistanceMetric::IP;
+}
 
 } // namespace duckdb

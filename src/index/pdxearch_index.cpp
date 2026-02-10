@@ -26,12 +26,13 @@ PDXearchIndex::PDXearchIndex(const string &name, IndexConstraintType index_const
 	const auto num_dimensions = ArrayType::GetSize(embedding_type);
 
 	// Try to get the vector metric from the options, this parameter should be verified during binding.
-	auto dist_func = PDXearchWrapper::DEFAULT_DISTANCE_FUNCTION;
-	const auto dist_func_opt = index_creation_options.find("metric");
-	if (dist_func_opt != index_creation_options.end()) {
-		const auto dist_func_val = PDXearchIndex::DISTANCE_FUNCTION_MAP.find(dist_func_opt->second.GetValue<string>());
-		if (dist_func_val != PDXearchIndex::DISTANCE_FUNCTION_MAP.end()) {
-			dist_func = dist_func_val->second;
+	auto dist_metric = PDXearchWrapper::DEFAULT_DISTANCE_METRIC;
+	const auto dist_metric_opt = index_creation_options.find("metric");
+	if (dist_metric_opt != index_creation_options.end()) {
+		const auto dist_metric_val =
+		    PDXearchIndex::DISTANCE_METRIC_MAP.find(dist_metric_opt->second.GetValue<string>());
+		if (dist_metric_val != PDXearchIndex::DISTANCE_METRIC_MAP.end()) {
+			dist_metric = dist_metric_val->second;
 		}
 	}
 
@@ -67,11 +68,11 @@ PDXearchIndex::PDXearchIndex(const string &name, IndexConstraintType index_const
 		D_ASSERT(ArrayType::GetChildType(embedding_type).id() == LogicalTypeId::FLOAT);
 
 #ifndef PDX_USE_ALTERNATIVE_GLOBAL_VERSION
-		pdxearch_wrapper = make_uniq<PDXearchWrapperF32>(dist_func, is_normalized, num_dimensions, n_probe, seed,
-		                                                 estimated_cardinality);
+		pdxearch_wrapper =
+		    make_uniq<PDXearchWrapperF32>(dist_metric, num_dimensions, n_probe, seed, estimated_cardinality);
 #else
-		pdxearch_wrapper = make_uniq<PDXearchWrapperGlobalF32>(dist_func, is_normalized, num_dimensions, n_probe, seed,
-		                                                       estimated_cardinality);
+		pdxearch_wrapper =
+		    make_uniq<PDXearchWrapperGlobalF32>(dist_metric, num_dimensions, n_probe, seed, estimated_cardinality);
 #endif
 	} else {
 		throw InternalException("Unsupported quantization: %s", quantization);
@@ -292,17 +293,23 @@ bool PDXearchIndex::TryBindIndexExpression(LogicalGet &get, unique_ptr<Expressio
 	return false;
 }
 
-string PDXearchIndex::GetDistanceFunction() const {
-	switch (pdxearch_wrapper->GetDistanceFunction()) {
-	case PDX::DistanceFunction::L2:
+string PDXearchIndex::GetDistanceMetric() const {
+	switch (pdxearch_wrapper->GetDistanceMetric()) {
+	case PDX::DistanceMetric::L2SQ:
 		return "l2sq";
+	case PDX::DistanceMetric::COSINE:
+		return "cosine";
+	case PDX::DistanceMetric::IP:
+		return "ip";
 	default:
-		throw InternalException("Unknown distance function");
+		throw InternalException("Unknown distance metric");
 	}
 }
 
-const case_insensitive_map_t<PDX::DistanceFunction> PDXearchIndex::DISTANCE_FUNCTION_MAP = {
-    {"l2sq", PDX::DistanceFunction::L2},
+const case_insensitive_map_t<PDX::DistanceMetric> PDXearchIndex::DISTANCE_METRIC_MAP = {
+    {"l2sq", PDX::DistanceMetric::L2SQ},
+    {"cosine", PDX::DistanceMetric::COSINE},
+    {"ip", PDX::DistanceMetric::IP},
 };
 
 const case_insensitive_map_t<PDX::Quantization> PDXearchIndex::QUANTIZATION_MAP = {
@@ -312,12 +319,18 @@ const case_insensitive_map_t<PDX::Quantization> PDXearchIndex::QUANTIZATION_MAP 
 unique_ptr<ExpressionMatcher> PDXearchIndex::MakeFunctionMatcher(const PDXearchWrapper &pdxearch_wrapper) {
 	unordered_set<string> distance_functions;
 
-	switch (pdxearch_wrapper.GetDistanceFunction()) {
-	case PDX::DistanceFunction::L2:
+	switch (pdxearch_wrapper.GetDistanceMetric()) {
+	case PDX::DistanceMetric::L2SQ:
 		distance_functions = {"array_distance", "<->"};
 		break;
+	case PDX::DistanceMetric::COSINE:
+		distance_functions = {"array_cosine_distance", "<=>"};
+		break;
+	case PDX::DistanceMetric::IP:
+		distance_functions = {"array_negative_inner_product", "<#>"};
+		break;
 	default:
-		throw NotImplementedException("Unknown distance function");
+		throw NotImplementedException("Unknown distance metric");
 	}
 
 	auto matcher = make_uniq<FunctionExpressionMatcher>();
