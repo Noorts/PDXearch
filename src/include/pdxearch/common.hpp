@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cassert>
 #include <queue>
 
 namespace PDX {
@@ -121,6 +122,49 @@ struct Cluster<F32> {
 
 template <Quantization q>
 using Heap = typename std::priority_queue<KNNCandidate<q>, std::vector<KNNCandidate<q>>, VectorComparator<q>>;
+
+struct PDXDimensionSplit {
+	const uint32_t horizontal_dimensions;
+	const uint32_t vertical_dimensions;
+};
+
+[[nodiscard]] static inline constexpr PDXDimensionSplit GetPDXDimensionSplit(const uint32_t num_dimensions) {
+	// Based on the original PDX code (see link) but with PROPORTION_VERTICAL_DIM fixed (in the original code the
+	// constant represents the horizontal, not the vertical portion):
+	// https://github.com/cwida/PDX/blob/4a2e65e90e177155c42d277b5523c4fd2fa35540/python/pdxearch/index_base.py#L119-L127
+
+	assert(num_dimensions % 4 == 0);
+	assert(num_dimensions >= PDX_MIN_DIMS);
+	assert(num_dimensions <= PDX_MAX_DIMS);
+
+	// Special case for 128 dimensions, to avoid {128, 0} split.
+	if (num_dimensions == 128) {
+		return {64, 64};
+	}
+
+	uint32_t v_dims = static_cast<uint32_t>(static_cast<float>(num_dimensions) * PDX::PROPORTION_VERTICAL_DIM);
+	uint32_t h_dims = num_dimensions - v_dims;
+
+	// Round the horizontal dimensions to the nearest multiple of PDX_VECTOR_SIZE.
+	if (h_dims % PDX_VECTOR_SIZE != 0) {
+		h_dims = ((h_dims + PDX_VECTOR_SIZE / 2) / PDX_VECTOR_SIZE) * PDX_VECTOR_SIZE;
+		v_dims = num_dimensions - h_dims;
+	}
+
+	return {h_dims, v_dims};
+};
+
+static_assert(GetPDXDimensionSplit(128).horizontal_dimensions == 64);
+static_assert(GetPDXDimensionSplit(128).vertical_dimensions == 64);
+
+static_assert(GetPDXDimensionSplit(256).horizontal_dimensions == 192);
+static_assert(GetPDXDimensionSplit(256).vertical_dimensions == 64);
+
+static_assert(GetPDXDimensionSplit(1024).horizontal_dimensions == 768);
+static_assert(GetPDXDimensionSplit(1024).vertical_dimensions == 256);
+
+static_assert(GetPDXDimensionSplit(1028).horizontal_dimensions == 768);
+static_assert(GetPDXDimensionSplit(1028).vertical_dimensions == 260);
 
 }; // namespace PDX
 
