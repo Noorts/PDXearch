@@ -15,7 +15,7 @@ class PDXearchIndex : public BoundIndex {
 public:
 	static constexpr const char *TYPE_NAME = "PDXEARCH";
 
-	static const case_insensitive_map_t<PDX::DistanceFunction> DISTANCE_FUNCTION_MAP;
+	static const case_insensitive_map_t<PDX::DistanceMetric> DISTANCE_METRIC_MAP;
 	static const case_insensitive_map_t<PDX::Quantization> QUANTIZATION_MAP;
 
 private:
@@ -131,7 +131,7 @@ public:
 		return pdxearch_wrapper->GetNumDimensions();
 	}
 
-	string GetDistanceFunction() const;
+	string GetDistanceMetric() const;
 
 	bool IsNormalized() const {
 		return pdxearch_wrapper->IsNormalized();

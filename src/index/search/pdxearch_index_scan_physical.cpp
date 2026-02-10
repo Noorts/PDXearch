@@ -30,7 +30,8 @@ public:
 		// Preprocess the query embedding.
 		const EmbeddingPreprocessor embedding_preprocessor =
 		    EmbeddingPreprocessor(index.GetNumDimensions(), index.GetRotationMatrix(), PDXearchWrapper::EPSILON0);
-		embedding_preprocessor.PreprocessEmbedding(bind_data.query_embedding.get(), preprocessed_query_embedding.get());
+		embedding_preprocessor.PreprocessEmbedding(bind_data.query_embedding.get(), preprocessed_query_embedding.get(),
+		                                           index.IsNormalized());
 
 		// Initialize the global heap.
 		{

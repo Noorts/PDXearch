@@ -29,6 +29,10 @@ enum DimensionsOrder {
 	DIMENSION_ZONES
 };
 
+// Distance metric functionality that is exposed externally.
+enum class DistanceMetric { L2SQ, COSINE, IP };
+
+// Used internally.
 enum DistanceFunction {
 	L2,
 	IP,

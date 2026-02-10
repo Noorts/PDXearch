@@ -31,9 +31,9 @@ PhysicalOperator &PDXearchIndex::CreatePlan(PlanIndexInput &input) {
 				throw BinderException("PDXearch index 'metric' must be a string");
 			}
 			auto metric = v.GetValue<string>();
-			if (PDXearchIndex::DISTANCE_FUNCTION_MAP.find(metric) == PDXearchIndex::DISTANCE_FUNCTION_MAP.end()) {
+			if (PDXearchIndex::DISTANCE_METRIC_MAP.find(metric) == PDXearchIndex::DISTANCE_METRIC_MAP.end()) {
 				vector<string> allowed_metrics;
-				for (auto &entry : PDXearchIndex::DISTANCE_FUNCTION_MAP) {
+				for (auto &entry : PDXearchIndex::DISTANCE_METRIC_MAP) {
 					allowed_metrics.push_back(StringUtil::Format("'%s'", entry.first));
 				}
 				throw BinderException("PDXearch index 'metric' must be one of: %s",

@@ -20,21 +20,25 @@ namespace duckdb {
 class PDXearchWrapper {
 public:
 	static constexpr float EPSILON0 = 1.5;
-	static constexpr PDX::DistanceFunction DEFAULT_DISTANCE_FUNCTION = PDX::DistanceFunction::L2;
+	static constexpr PDX::DistanceMetric DEFAULT_DISTANCE_METRIC = PDX::DistanceMetric::L2SQ;
 	static constexpr PDX::Quantization DEFAULT_QUANTIZATION = PDX::Quantization::F32;
 	static constexpr bool DEFAULT_NORMALIZE_ENABLED = false;
 	static constexpr int32_t DEFAULT_N_PROBE = 128;
 
 private:
 	const uint32_t num_dimensions;
+	// Whether the embeddings (both the query embeddings and those stored in the
+	// index) are normalized. The PDXearch kernel only implements Euclidian
+	// distance (L2SQ). To compute the cosine and inner product distances we
+	// normalize and then use L2SQ.
+	const bool is_normalized;
 
 	// The fields below are index options that can be set during index creation:
 	// `CREATE INDEX ON t USING PDXearch(vec) WITH (n_probe = 10, seed = 42)`.
 	// See `pdxearch_index_plan.cpp` for the validation logic, and
 	// `pdxearch_index.cpp` for the usage.
-	const PDX::DistanceFunction distance_function;
+	const PDX::DistanceMetric distance_metric;
 	const PDX::Quantization quantization;
-	const bool is_normalized;
 	// Between 16 and 128 is common. Setting this to 0 will probe all clusters.
 	// Can be set at index build time using the 'n_probe' index option, else
 	// uses `DEFAULT_N_PROBE`. At query time the 'pdxearch_n_probe' runtime
@@ -47,10 +51,10 @@ protected:
 	const unique_ptr<float[]> rotation_matrix;
 
 public:
-	PDXearchWrapper(PDX::Quantization quantization, PDX::DistanceFunction distance_function, bool is_normalized,
-	                uint32_t num_dimensions, uint32_t n_probe, int32_t seed)
-	    : num_dimensions(num_dimensions), distance_function(distance_function), quantization(quantization),
-	      is_normalized(is_normalized), n_probe(n_probe), seed(seed),
+	PDXearchWrapper(PDX::Quantization quantization, PDX::DistanceMetric distance_metric, uint32_t num_dimensions,
+	                uint32_t n_probe, int32_t seed)
+	    : num_dimensions(num_dimensions), is_normalized(DistanceMetricRequiresNormalization(distance_metric)),
+	      distance_metric(distance_metric), quantization(quantization), n_probe(n_probe), seed(seed),
 	      rotation_matrix(GenerateRandomRotationMatrix(num_dimensions, seed)) {
 	}
 	virtual ~PDXearchWrapper() = default;
@@ -69,8 +73,8 @@ public:
 	uint32_t GetNumDimensions() const {
 		return num_dimensions;
 	}
-	PDX::DistanceFunction GetDistanceFunction() const {
-		return distance_function;
+	PDX::DistanceMetric GetDistanceMetric() const {
+		return distance_metric;
 	}
 	PDX::Quantization GetQuantization() const {
 		return quantization;
@@ -115,9 +119,9 @@ private:
 	std::vector<PDXRowGroup> row_groups;
 
 public:
-	PDXearchWrapperF32(PDX::DistanceFunction distance_function, bool is_normalized, uint32_t num_dimensions,
-	                   uint32_t n_probe, int32_t seed, idx_t estimated_cardinality)
-	    : PDXearchWrapper(PDX::Quantization::F32, distance_function, is_normalized, num_dimensions, n_probe, seed) {
+	PDXearchWrapperF32(PDX::DistanceMetric distance_metric, uint32_t num_dimensions, uint32_t n_probe, int32_t seed,
+	                   idx_t estimated_cardinality)
+	    : PDXearchWrapper(PDX::Quantization::F32, distance_metric, num_dimensions, n_probe, seed) {
 		if (estimated_cardinality == 0) {
 			throw InternalException(
 			    "Something went wrong: estimated_cardinality is 0. This is likely because a malformed persisted index "
@@ -152,7 +156,7 @@ public:
 
 		// Compute K-means centroids and embedding-to-centroid assignment.
 		KMeansResult kmeans_result =
-		    ComputeKMeans(embeddings, num_embeddings, num_dimensions, num_clusters_per_row_group);
+		    ComputeKMeans(embeddings, num_embeddings, num_dimensions, num_clusters_per_row_group, GetDistanceMetric());
 
 		// Store centroids.
 		row_group.index->centroids = std::move(kmeans_result.centroids);
@@ -254,13 +258,13 @@ private:
 	std::unique_ptr<PDX::PDXearch<PDX::F32>> searcher;
 
 public:
-	PDXearchWrapperGlobalF32(PDX::DistanceFunction distance_function, bool is_normalized, uint32_t num_dimensions,
-	                         uint32_t n_probe, int32_t seed, idx_t estimated_cardinality)
-	    : PDXearchWrapper(PDX::Quantization::F32, distance_function, is_normalized, num_dimensions, n_probe, seed),
+	PDXearchWrapperGlobalF32(PDX::DistanceMetric distance_metric, uint32_t num_dimensions, uint32_t n_probe,
+	                         int32_t seed, idx_t estimated_cardinality)
+	    : PDXearchWrapper(PDX::Quantization::F32, distance_metric, num_dimensions, n_probe, seed),
 	      num_clusters(ComputeNumberOfClusters(estimated_cardinality)), total_num_embeddings(estimated_cardinality),
 	      row_id_cluster_mapping(estimated_cardinality),
 	      index(make_uniq<PDX::IndexPDXIVF<PDX::F32>>(num_dimensions, estimated_cardinality, num_clusters,
-	                                                  is_normalized)),
+	                                                  IsNormalized())),
 	      pruner(make_uniq<PDX::ADSamplingPruner<PDX::F32>>(num_dimensions, EPSILON0, rotation_matrix.get())) {
 		// Additional constraints on the number of dimensions are enforced in `pdxearch_index_plan.cpp`.
 		D_ASSERT(num_dimensions > 0);
@@ -273,7 +277,8 @@ public:
 		D_ASSERT(num_embeddings == total_num_embeddings);
 
 		// Compute K-means centroids and embedding-to-centroid assignment.
-		KMeansResult kmeans_result = ComputeKMeans(embeddings, num_embeddings, index->num_dimensions, num_clusters);
+		KMeansResult kmeans_result =
+		    ComputeKMeans(embeddings, num_embeddings, index->num_dimensions, num_clusters, GetDistanceMetric());
 
 		// Store centroids.
 		index->centroids = std::move(kmeans_result.centroids);
