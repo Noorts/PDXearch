@@ -2,13 +2,15 @@
 # description: Validate the parameters passed during index creation.
 # group: [create]
 
+require parquet
+
 require pdxearch
 
 statement ok
 CREATE TABLE t1 (id INTEGER, emb FLOAT[128]);
 
 statement ok
-INSERT INTO t1 SELECT i + 1 as id, list_transform(range(128), x -> random()) FROM range(100) t(i);
+INSERT INTO t1 FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') LIMIT 100;
 
 # ============================================
 # Combination of parameters
