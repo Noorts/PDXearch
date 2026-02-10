@@ -46,7 +46,7 @@ statement ok
 CREATE OR REPLACE TABLE t1 (id INTEGER, emb FLOAT[${dims}]);
 
 statement ok
-INSERT INTO t1 SELECT i + 1 as id, list_transform(range(${dims}), x -> random()) FROM range(100) t(i);
+INSERT INTO t1 SELECT i + 1 as id, list_transform(range(${dims}), x -> random()) FROM range(10000) t(i);
 
 statement ok
 CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb);
@@ -63,7 +63,7 @@ statement ok
 CREATE OR REPLACE TABLE t1 (id INTEGER, emb FLOAT[${dims}]);
 
 statement ok
-INSERT INTO t1 SELECT i + 1 as id, list_transform(range(${dims}), x -> random()) FROM range(100) t(i);
+INSERT INTO t1 SELECT i + 1 as id, list_transform(range(${dims}), x -> random()) FROM range(10000) t(i);
 
 statement error
 CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb);
