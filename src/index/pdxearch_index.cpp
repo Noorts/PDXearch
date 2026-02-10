@@ -51,12 +51,6 @@ PDXearchIndex::PDXearchIndex(const string &name, IndexConstraintType index_const
 		n_probe = n_probe_opt->second.GetValue<int32_t>();
 	}
 
-	auto is_normalized = PDXearchWrapper::DEFAULT_NORMALIZE_ENABLED;
-	const auto normalize_opt = index_creation_options.find("normalize");
-	if (normalize_opt != index_creation_options.end()) {
-		is_normalized = normalize_opt->second.GetValue<int32_t>() == 1;
-	}
-
 	// TODO: Confirm the static cast is sound.
 	auto seed = static_cast<int32_t>(std::random_device {}());
 	const auto seed_opt = index_creation_options.find("seed");

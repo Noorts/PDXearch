@@ -369,7 +369,6 @@ InsertionOrderPreservingMap<string> PhysicalPDXearchIndexFilteredScan::ParamsToS
 	InsertionOrderPreservingMap<string> result;
 	result["Table"] = bind_data->table.name;
 	result["PDXearch Index"] = bind_data->index.GetIndexName();
-	result["Normalized"] = bind_data->index.Cast<PDXearchIndex>().IsNormalized() ? "true" : "false";
 	result["Total Clusters"] =
 	    StringUtil::Format("%zu", bind_data->index.Cast<PDXearchIndex>().GetNumClustersPerRowGroup() *
 	                                  bind_data->index.Cast<PDXearchIndex>().GetNumRowGroups());
