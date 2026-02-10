@@ -27,21 +27,20 @@ PhysicalCreatePDXearchIndex::PhysicalCreatePDXearchIndex(PhysicalPlan &physical_
 class CreatePDXearchIndexGlobalSinkState : public GlobalSinkState {
 public:
 	explicit CreatePDXearchIndexGlobalSinkState(const PhysicalCreatePDXearchIndex &op)
-	    : num_dimensions(ArrayType::GetSize(op.unbound_expressions[0]->return_type)) {
-		auto &storage = op.table.GetStorage();
-		global_index = make_uniq<PDXearchIndex>(op.info->index_name, op.info->constraint_type, op.storage_ids,
-		                                        TableIOManager::Get(storage), op.unbound_expressions, storage.db,
-		                                        op.info->options, IndexStorageInfo(), op.estimated_cardinality);
-		embedding_preprocessor = make_uniq<EmbeddingPreprocessor>(
-		    num_dimensions, global_index->Cast<PDXearchIndex>().GetRotationMatrix(), PDXearchWrapper::EPSILON0);
-		is_normalized = global_index->Cast<PDXearchIndex>().IsNormalized();
+	    : global_index(make_uniq<PDXearchIndex>(op.info->index_name, op.info->constraint_type, op.storage_ids,
+	                                            TableIOManager::Get(op.table.GetStorage()), op.unbound_expressions,
+	                                            op.table.GetStorage().db, op.info->options, IndexStorageInfo(),
+	                                            op.estimated_cardinality)),
+	      num_dimensions(ArrayType::GetSize(op.unbound_expressions[0]->return_type)),
+	      embedding_preprocessor(make_uniq<EmbeddingPreprocessor>(
+	          num_dimensions, global_index->Cast<PDXearchIndex>().GetRotationMatrix(), PDXearchWrapper::EPSILON0)),
+	      is_normalized(global_index->Cast<PDXearchIndex>().IsNormalized()) {
 	}
 
 	unique_ptr<BoundIndex> global_index;
 	const idx_t num_dimensions;
-
-	unique_ptr<EmbeddingPreprocessor> embedding_preprocessor;
-	bool is_normalized {false};
+	const unique_ptr<EmbeddingPreprocessor> embedding_preprocessor;
+	const bool is_normalized {false};
 };
 
 unique_ptr<GlobalSinkState> PhysicalCreatePDXearchIndex::GetGlobalSinkState(ClientContext &context) const {

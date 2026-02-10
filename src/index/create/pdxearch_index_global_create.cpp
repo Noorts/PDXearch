@@ -31,17 +31,17 @@ unique_ptr<LocalSinkState> PhysicalCreateGlobalPDXearchIndex::GetLocalSinkState(
 class CreateGlobalPDXearchIndexGlobalSinkState : public GlobalSinkState {
 public:
 	explicit CreateGlobalPDXearchIndexGlobalSinkState(const PhysicalCreateGlobalPDXearchIndex &op)
-	    : num_dimensions(ArrayType::GetSize(op.unbound_expressions[0]->return_type)),
+	    : global_index(make_uniq<PDXearchIndex>(op.info->index_name, op.info->constraint_type, op.storage_ids,
+	                                            TableIOManager::Get(op.table.GetStorage()), op.unbound_expressions,
+	                                            op.table.GetStorage().db, op.info->options, IndexStorageInfo(),
+	                                            op.estimated_cardinality)),
+	      num_dimensions(ArrayType::GetSize(op.unbound_expressions[0]->return_type)),
 	      max_num_embeddings(op.estimated_cardinality),
 	      embeddings(make_uniq_array<float>(max_num_embeddings * num_dimensions)),
-	      row_ids(make_uniq_array<row_t>(max_num_embeddings)) {
-		auto &storage = op.table.GetStorage();
-		global_index = make_uniq<PDXearchIndex>(op.info->index_name, op.info->constraint_type, op.storage_ids,
-		                                        TableIOManager::Get(storage), op.unbound_expressions, storage.db,
-		                                        op.info->options, IndexStorageInfo(), op.estimated_cardinality);
-		embedding_preprocessor = make_uniq<EmbeddingPreprocessor>(
-		    num_dimensions, global_index->Cast<PDXearchIndex>().GetRotationMatrix(), PDXearchWrapper::EPSILON0);
-		is_normalized = global_index->Cast<PDXearchIndex>().IsNormalized();
+	      row_ids(make_uniq_array<row_t>(max_num_embeddings)),
+	      embedding_preprocessor(make_uniq<EmbeddingPreprocessor>(
+	          num_dimensions, global_index->Cast<PDXearchIndex>().GetRotationMatrix(), PDXearchWrapper::EPSILON0)),
+	      is_normalized(global_index->Cast<PDXearchIndex>().IsNormalized()) {
 	}
 	unique_ptr<BoundIndex> global_index;
 
@@ -52,8 +52,8 @@ public:
 	unique_ptr<float[]> embeddings;
 	unique_ptr<row_t[]> row_ids;
 
-	unique_ptr<EmbeddingPreprocessor> embedding_preprocessor;
-	bool is_normalized {false};
+	const unique_ptr<EmbeddingPreprocessor> embedding_preprocessor;
+	const bool is_normalized {false};
 };
 
 unique_ptr<GlobalSinkState> PhysicalCreateGlobalPDXearchIndex::GetGlobalSinkState(ClientContext &context) const {
