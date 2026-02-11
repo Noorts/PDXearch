@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cmath>
-#include "pdxearch/common.hpp"
+#include "common.hpp"
 
 namespace PDX {
 
@@ -14,16 +14,11 @@ public:
 	virtual ~Quantizer() = default;
 
 public:
-	void NormalizeQuery(const float *src, float *out) const {
+	void NormalizeQuery(const float *src, float *out) {
 		float sum = 0.0f;
 		for (size_t i = 0; i < num_dimensions; ++i) {
 			sum += src[i] * src[i];
 		}
-
-		if (sum == 0.0f) {
-			return;
-		}
-
 		float norm = std::sqrt(sum);
 		for (size_t i = 0; i < num_dimensions; ++i) {
 			out[i] = src[i] / norm;
@@ -56,7 +51,7 @@ public:
 	void PrepareQuery(const float *query, const float for_base, const float scale_factor) {
 		for (size_t i = 0; i < num_dimensions; ++i) {
 			// Scale factor is global in symmetric kernel
-			int rounded = static_cast<int>(std::round((query[i] - for_base) * scale_factor));
+			int rounded = std::round((query[i] - for_base) * scale_factor);
 			dim_clip_value[i] = rounded;
 			if (rounded > MAX_VALUE || rounded < 0) {
 				quantized_query[i] = 0;

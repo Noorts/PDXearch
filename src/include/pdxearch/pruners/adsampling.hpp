@@ -1,27 +1,16 @@
 #ifndef PDX_ADSAMPLING_U8_HPP
 #define PDX_ADSAMPLING_U8_HPP
 
-#include <Eigen/Dense>
+#include <Eigen/Eigen/Dense>
 #include <queue>
-#include "pdxearch/common.hpp"
-
+#include <utility>
 #ifdef HAS_FFTW
 #include <fftw3.h>
 #endif
 
-#ifndef SKM_RESTRICT
-#if defined(__GNUC__) || defined(__clang__)
-#define SKM_RESTRICT __restrict__
-#elif defined(_MSC_VER)
-#define SKM_RESTRICT __restrict
-#elif defined(__INTEL_COMPILER)
-#define SKM_RESTRICT __restrict__
-#else
-#define SKM_RESTRICT
-#endif
-#endif
-
 namespace PDX {
+
+static std::vector<float> ratios {};
 
 /******************************************************************
  * ADSampling pruner
@@ -29,15 +18,13 @@ namespace PDX {
 template <Quantization q = F32>
 class ADSamplingPruner {
 	using DISTANCES_TYPE = DistanceType_t<q>;
-	using VALUE_TYPE = DataType_t<q>;
 	using KNNCandidate_t = KNNCandidate<q>;
 	using VectorComparator_t = VectorComparator<q>;
-	using MatrixR = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
 public:
-	const uint32_t num_dimensions;
+	uint32_t num_dimensions;
 
-	ADSamplingPruner(const uint32_t num_dimensions, const float epsilon0, const float *matrix_p)
+	ADSamplingPruner(uint32_t num_dimensions, float epsilon0, float *matrix_p)
 	    : num_dimensions(num_dimensions), epsilon0(epsilon0) {
 		ratios.resize(num_dimensions);
 		for (size_t i = 0; i < num_dimensions; ++i) {
@@ -45,19 +32,19 @@ public:
 		}
 #ifdef HAS_FFTW
 		if (num_dimensions >= D_THRESHOLD_FOR_DCT_ROTATION) {
-			matrix = Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(
-			    matrix_p, 1, num_dimensions);
+			matrix = Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(matrix_p, 1,
+			                                                                                           num_dimensions);
 		} else {
-			matrix = Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(
+			matrix = Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(
 			    matrix_p, num_dimensions, num_dimensions);
 		}
 #else
-		matrix = Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(
+		matrix = Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(
 		    matrix_p, num_dimensions, num_dimensions);
 #endif
 	}
 
-	void SetEpsilon0(const float epsilon0) {
+	void SetEpsilon0(float epsilon0) {
 		ADSamplingPruner::epsilon0 = epsilon0;
 		for (size_t i = 0; i < num_dimensions; ++i) {
 			ratios[i] = GetRatio(i);
@@ -70,58 +57,51 @@ public:
 
 	template <Quantization Q = q>
 	DistanceType_t<Q>
-	GetPruningThreshold(uint32_t,
+	GetPruningThreshold(uint32_t k,
 	                    std::priority_queue<KNNCandidate<Q>, std::vector<KNNCandidate<Q>>, VectorComparator<Q>> &heap,
-	                    const uint32_t current_dimension_idx) const {
+	                    const uint32_t current_dimension_idx) {
 		float ratio = current_dimension_idx == num_dimensions ? 1 : ratios[current_dimension_idx];
 		// return std::numeric_limits<DistanceType_t<Q>>::max();
 		return heap.top().distance * ratio;
 	}
 
-	void PreprocessQuery(const float *SKM_RESTRICT const raw_query_embedding,
-	                     float *SKM_RESTRICT const output_query_embedding) const {
-		PreprocessEmbeddings(raw_query_embedding, output_query_embedding, 1);
-	}
-
-	void PreprocessEmbeddings(const float *SKM_RESTRICT const input_embeddings,
-	                          float *SKM_RESTRICT const output_embeddings, const size_t num_embeddings) const {
-		Rotate(input_embeddings, output_embeddings, num_embeddings);
+	void PreprocessQuery(float *raw_query, float *query) {
+		Multiply(raw_query, query, num_dimensions);
 	}
 
 private:
 	float epsilon0 = 2.1;
 	Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> matrix;
-	std::vector<float> ratios;
 
-	float GetRatio(const size_t &visited_dimensions) const {
+	float GetRatio(const size_t &visited_dimensions) {
 		if (visited_dimensions == 0) {
 			return 1;
 		}
-		if (visited_dimensions == static_cast<int>(num_dimensions)) {
+		if (visited_dimensions == (int)num_dimensions) {
 			return 1.0;
 		}
-		return static_cast<float>(visited_dimensions) / num_dimensions *
-		       (1.0 + epsilon0 / std::sqrt(visited_dimensions)) * (1.0 + epsilon0 / std::sqrt(visited_dimensions));
+		return 1.0 * visited_dimensions / ((int)num_dimensions) * (1.0 + epsilon0 / std::sqrt(visited_dimensions)) *
+		       (1.0 + epsilon0 / std::sqrt(visited_dimensions));
 	}
 
-	/**
-	 * @brief Rotates embeddings using the rotation matrix.
-	 *
-	 * Transforms embeddings to a rotated space where dimensions contribute more equally
-	 * to the total distance, enabling effective early termination.
-	 *
-	 * For DCT path: applies sign flipping followed by DCT-II transform.
-	 * For matrix path: computes out = embeddings * matrix^T.
-	 *
-	 * @param embeddings Input embeddings (row-major, n × num_dimensions)
-	 * @param out_buffer Output buffer for rotated embeddings (n × num_dimensions)
-	 * @param n Number of embeddings to rotate
-	 */
-	void Rotate(const VALUE_TYPE *SKM_RESTRICT const embeddings, VALUE_TYPE *SKM_RESTRICT const out_buffer,
-	            const uint32_t n) const {
-		Eigen::Map<const MatrixR> embeddings_matrix(embeddings, n, num_dimensions);
-		Eigen::Map<MatrixR> out(out_buffer, n, num_dimensions);
-		out.noalias() = embeddings_matrix * matrix.transpose();
+	void Multiply(float *raw_query, float *query, uint32_t num_dimensions) {
+		Eigen::Map<const Eigen::RowVectorXf> query_matrix(raw_query, num_dimensions);
+		Eigen::Map<Eigen::RowVectorXf> output(query, num_dimensions);
+#ifdef HAS_FFTW
+		if (num_dimensions >= D_THRESHOLD_FOR_DCT_ROTATION) {
+			Eigen::RowVectorXf first_row = matrix.row(0);
+			Eigen::RowVectorXf pre_output = query_matrix.array() * first_row.array();
+			fftwf_plan plan =
+			    fftwf_plan_r2r_1d(num_dimensions, pre_output.data(), output.data(), FFTW_REDFT10, FFTW_ESTIMATE);
+			fftwf_execute(plan);
+			fftwf_destroy_plan(plan);
+			output[0] *= std::sqrt(1.0 / (4 * num_dimensions));
+			for (int i = 1; i < num_dimensions; ++i)
+				output[i] *= std::sqrt(1.0 / (2 * num_dimensions));
+			return;
+		}
+#endif
+		output.noalias() = query_matrix * matrix;
 	}
 };
 
