@@ -9,7 +9,6 @@ namespace PDX {
 
 static constexpr float PROPORTION_HORIZONTAL_DIM = 0.75f;
 static constexpr size_t D_THRESHOLD_FOR_DCT_ROTATION = 512;
-static constexpr size_t PDX_VECTOR_SIZE = 64;
 static constexpr size_t PDX_MAX_DIMS = 65536;
 static constexpr size_t H_DIM_SIZE = 64;
 static constexpr uint32_t DIMENSIONS_FETCHING_SIZES[24] = {4,  4,  8,  8,   8,   16,  16,  32,  32,  32,  32,   64,
