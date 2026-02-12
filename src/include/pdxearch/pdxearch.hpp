@@ -108,6 +108,7 @@ protected:
 	GetPruningThreshold(uint32_t k,
 	                    std::priority_queue<KNNCandidate<Q>, std::vector<KNNCandidate<Q>>, VectorComparator<Q>> &heap,
 	                    DistanceType_t<Q> &pruning_threshold, uint32_t current_dimension_idx) {
+		const std::lock_guard<std::mutex> lock(*best_k_mutex);
 		pruning_threshold = pruner.template GetPruningThreshold<Q>(k, heap, current_dimension_idx);
 	};
 
@@ -509,6 +510,8 @@ public:
 
 	std::vector<KNNCandidate_t> SearchGlobal(const float *__restrict const raw_query, const uint32_t k) {
 		Heap<q> local_heap {};
+		std::mutex local_mutex;
+		best_k_mutex = &local_mutex;
 		alignas(64) float query[PDX_MAX_DIMS];
 		if (!pdx_data.is_normalized) {
 			pruner.PreprocessQuery(raw_query, query);
@@ -568,6 +571,8 @@ public:
 	std::vector<KNNCandidate_t> FilteredSearchGlobal(const float *__restrict const raw_query, const uint32_t k,
 	                                                 const PredicateEvaluator &predicate_evaluator) {
 		Heap<q> local_heap {};
+		std::mutex local_mutex;
+		best_k_mutex = &local_mutex;
 		alignas(64) float query[PDX_MAX_DIMS];
 		if (!pdx_data.is_normalized) {
 			pruner.PreprocessQuery(raw_query, query);
