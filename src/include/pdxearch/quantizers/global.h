@@ -10,6 +10,8 @@ namespace PDX {
 class Quantizer {
 
 public:
+	explicit Quantizer(size_t num_dimensions) : num_dimensions(num_dimensions) {
+	}
 	virtual ~Quantizer() = default;
 
 public:
@@ -28,11 +30,7 @@ public:
 			out[i] = src[i] / norm;
 		}
 	}
-	size_t num_dimensions = 0;
-
-	void SetD(size_t d) {
-		num_dimensions = d;
-	}
+	const size_t num_dimensions;
 
 	virtual void ScaleQuery(const float *src, int32_t *dst) {};
 };
@@ -42,7 +40,7 @@ class Global8Quantizer : public Quantizer {
 public:
 	using QUANTIZED_QUERY_TYPE = QuantizedVectorType_t<q>;
 
-	Global8Quantizer() {
+	explicit Global8Quantizer(size_t num_dimensions) : Quantizer(num_dimensions) {
 		if constexpr (q == Quantization::U8) {
 			MAX_VALUE = 255;
 		}

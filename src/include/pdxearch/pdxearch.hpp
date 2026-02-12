@@ -29,7 +29,8 @@ public:
 	Pruner &pruner;
 	INDEX_TYPE &pdx_data;
 
-	PDXearch(INDEX_TYPE &data_index, Pruner &pruner) : pruner(pruner), pdx_data(data_index) {
+	PDXearch(INDEX_TYPE &data_index, Pruner &pruner)
+	    : quantizer(data_index.num_dimensions), pruner(pruner), pdx_data(data_index) {
 		indices_dimensions.resize(pdx_data.num_dimensions);
 		cluster_indices_in_access_order.resize(pdx_data.num_clusters);
 		cluster_offsets.resize(pdx_data.num_clusters);
@@ -37,7 +38,6 @@ public:
 			cluster_offsets[i] = total_embeddings;
 			total_embeddings += pdx_data.clusters[i].num_embeddings;
 		}
-		quantizer.SetD(pdx_data.num_dimensions);
 	}
 
 	void SetNProbe(size_t nprobe) {
@@ -523,7 +523,6 @@ public:
 		// TODO: Incorporate this to U8 PDX (no IVF2)
 		// GetClustersAccessOrderIVFPDX(query);
 		std::vector<uint32_t> local_cluster_order;
-		local_cluster_order.resize(pdx_data.num_clusters);
 		GetClustersAccessOrderIVF(query, pdx_data, clusters_to_visit, local_cluster_order);
 		// PDXearch core
 		alignas(64) int32_t local_dim_clip_value[PDX_MAX_DIMS] = {};
@@ -584,7 +583,6 @@ public:
 		    (ivf_nprobe == 0 || ivf_nprobe > pdx_data.num_clusters) ? pdx_data.num_clusters : ivf_nprobe;
 
 		std::vector<uint32_t> local_cluster_order;
-		local_cluster_order.resize(pdx_data.num_clusters);
 		GetClustersAccessOrderIVF(query, pdx_data, clusters_to_visit, local_cluster_order);
 		// PDXearch core
 		alignas(64) int32_t local_dim_clip_value[PDX_MAX_DIMS] = {};
