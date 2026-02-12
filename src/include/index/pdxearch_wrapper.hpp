@@ -163,8 +163,12 @@ public:
 		// Row-major buffer that the current cluster's embeddings are "gathered" into. This buffer is the source for
 		// StoreClusterEmbeddings, the result of which is persistently stored in the index. The buffer is reused across
 		// clusters.
+		size_t max_cluster_size = 0;
+		for (size_t i = 0; i < num_clusters_per_row_group; i++) {
+			max_cluster_size = std::max(max_cluster_size, kmeans_result.assignments[i].size());
+		}
 		std::unique_ptr<float[]> tmp_cluster_embeddings =
-		    std::make_unique<float[]>(static_cast<uint64_t>(PDX::MAX_EMBEDDINGS_PER_CLUSTER * num_dimensions));
+		    std::make_unique<float[]>(static_cast<uint64_t>(max_cluster_size * num_dimensions));
 
 		// Set up the IVF clusters' metadata and store the embeddings.
 		for (size_t cluster_idx = 0; cluster_idx < num_clusters_per_row_group; cluster_idx++) {
@@ -284,8 +288,12 @@ public:
 		// Row-major buffer that the current cluster's embeddings are "gathered" into. This buffer is the source for
 		// StoreClusterEmbeddings, the result of which is persistently stored in the index. The buffer is reused across
 		// clusters.
+		size_t max_cluster_size = 0;
+		for (size_t i = 0; i < num_clusters; i++) {
+			max_cluster_size = std::max(max_cluster_size, kmeans_result.assignments[i].size());
+		}
 		std::unique_ptr<float[]> tmp_cluster_embeddings =
-		    std::make_unique<float[]>(static_cast<uint64_t>(PDX::MAX_EMBEDDINGS_PER_CLUSTER * index->num_dimensions));
+		    std::make_unique<float[]>(static_cast<uint64_t>(max_cluster_size * index->num_dimensions));
 
 		// Set up the IVF clusters' metadata and store the embeddings.
 		for (size_t cluster_idx = 0; cluster_idx < num_clusters; cluster_idx++) {

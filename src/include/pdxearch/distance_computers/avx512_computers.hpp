@@ -80,9 +80,8 @@ public:
 
 	template <bool SKIP_PRUNED>
 	static void Vertical(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t n_vectors,
-	                     size_t total_vectors, size_t start_dimension, size_t end_dimension,
-	                     DISTANCE_TYPE *distances_p, const uint32_t *pruning_positions = nullptr,
-	                     const int32_t *dim_clip_value = nullptr) {
+	                     size_t total_vectors, size_t start_dimension, size_t end_dimension, DISTANCE_TYPE *distances_p,
+	                     const uint32_t *pruning_positions = nullptr, const int32_t *dim_clip_value = nullptr) {
 		// SIMD is less efficient when looping on the array of not-yet pruned vectors
 		// A way to improve the performance by ~20% is using a GATHER intrinsic. However this only works on Intel
 		// microarchs. In AMD (Zen 4, Zen 3) using a GATHER is shooting ourselves in the foot (~80 uops)

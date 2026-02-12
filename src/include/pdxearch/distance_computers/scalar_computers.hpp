@@ -18,9 +18,8 @@ public:
 
 	template <bool SKIP_PRUNED>
 	static void Vertical(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t n_vectors,
-	                     size_t total_vectors, size_t start_dimension, size_t end_dimension,
-	                     DISTANCE_TYPE *distances_p, const uint32_t *pruning_positions = nullptr,
-	                     const int32_t *dim_clip_value = nullptr) {
+	                     size_t total_vectors, size_t start_dimension, size_t end_dimension, DISTANCE_TYPE *distances_p,
+	                     const uint32_t *pruning_positions = nullptr, const int32_t *dim_clip_value = nullptr) {
 		size_t dimensions_jump_factor = total_vectors;
 		for (size_t dimension_idx = start_dimension; dimension_idx < end_dimension; ++dimension_idx) {
 			size_t offset_to_dimension_start = dimension_idx * dimensions_jump_factor;
@@ -29,8 +28,7 @@ public:
 				if constexpr (SKIP_PRUNED) {
 					true_vector_idx = pruning_positions[vector_idx];
 				}
-				DISTANCE_TYPE to_multiply =
-				    query[dimension_idx] - data[offset_to_dimension_start + true_vector_idx];
+				DISTANCE_TYPE to_multiply = query[dimension_idx] - data[offset_to_dimension_start + true_vector_idx];
 				distances_p[true_vector_idx] += to_multiply * to_multiply;
 			}
 		}
