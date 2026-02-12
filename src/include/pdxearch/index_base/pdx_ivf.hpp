@@ -1,5 +1,4 @@
-#ifndef PDX_IVF_HPP
-#define PDX_IVF_HPP
+#pragma once
 
 #include <cstdint>
 #include <cassert>
@@ -37,5 +36,3 @@ public:
 };
 
 } // namespace PDX
-
-#endif // PDX_IVF_HPP

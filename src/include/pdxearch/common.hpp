@@ -1,5 +1,4 @@
-#ifndef PDX_COMMON_HPP
-#define PDX_COMMON_HPP
+#pragma once
 
 #include <cstdint>
 #include <cstdio>
@@ -15,41 +14,22 @@ static constexpr size_t PDX_MAX_DIMS = 4096;
 static constexpr size_t PDX_MIN_DIMS = 128;
 static constexpr size_t MAX_EMBEDDINGS_PER_CLUSTER = 10240;
 
+static constexpr size_t H_DIM_SIZE = 64;
+static constexpr uint32_t DIMENSIONS_FETCHING_SIZES[24] = {
+	4, 4, 8, 8, 8, 16, 16, 32, 32, 32, 32, 64, 64, 64, 64, 128, 128, 128, 128, 256, 256, 512, 1024, 2048};
+
 template <class T, T val = 8>
 static constexpr uint32_t AlignValue(T n) {
 	return ((n + (val - 1)) / val) * val;
 }
 
-enum DimensionsOrder {
-	SEQUENTIAL,
-	DISTANCE_TO_MEANS,
-	DECREASING,
-	DISTANCE_TO_MEANS_IMPROVED,
-	DECREASING_IMPROVED,
-	DIMENSION_ZONES
-};
-
-// Distance metric functionality that is exposed externally.
 enum class DistanceMetric { L2SQ, COSINE, IP };
-
-// Used internally.
-enum DistanceFunction {
-	L2,
-	IP,
-	L1,
-	NEGATIVE_L2 // Only the negative term of L2 (-2*q[i]*d[i])
-};
 
 enum Quantization {
 	F32,
 	U8,
-	// TODO:
 	F16,
-	BF,
-	U6,
-	U4,
-	ASYMMETRIC_U8,
-	ASYMMETRIC_LEP_U8
+	BF
 };
 
 // TODO: Do the same for indexes?
@@ -174,4 +154,3 @@ static_assert(GetPDXDimensionSplit(1028).vertical_dimensions == 260);
 
 }; // namespace PDX
 
-#endif // PDX_COMMON_HPP

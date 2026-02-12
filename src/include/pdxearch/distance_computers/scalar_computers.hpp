@@ -1,5 +1,4 @@
-#ifndef PDX_SCALAR_COMPUTERS_HPP
-#define PDX_SCALAR_COMPUTERS_HPP
+#pragma once
 
 #include <cstdint>
 #include <cstdio>
@@ -72,5 +71,3 @@ public:
 };
 
 } // namespace PDX
-
-#endif // PDX_SCALAR_COMPUTERS_HPP

@@ -1,6 +1,4 @@
 #pragma once
-#ifndef PDX_NEON_COMPUTERS_HPP
-#define PDX_NEON_COMPUTERS_HPP
 
 #include <cstdint>
 #include <cstdio>
@@ -87,5 +85,3 @@ public:
 };
 
 } // namespace PDX
-
-#endif // PDX_NEON_COMPUTERS_HPP

@@ -1,5 +1,4 @@
-#ifndef PDX_PREDICATE_EVALUATOR_H
-#define PDX_PREDICATE_EVALUATOR_H
+#pragma once
 
 #include <memory>
 #include <cstdint>
@@ -29,4 +28,4 @@ public:
 
 }; // namespace PDX
 
-#endif // PDX_PREDICATE_EVALUATOR_H
+

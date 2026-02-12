@@ -1,5 +1,4 @@
-#ifndef PDX_AVX512_COMPUTERS_HPP
-#define PDX_AVX512_COMPUTERS_HPP
+#pragma once
 
 #include <cstdint>
 #include <cstdio>
@@ -172,5 +171,3 @@ public:
 };
 
 } // namespace PDX
-
-#endif // PDX_AVX512_COMPUTERS_HPP

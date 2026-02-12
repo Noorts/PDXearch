@@ -1,6 +1,4 @@
 #pragma once
-#ifndef PDX_BASE_COMPUTERS_HPP
-#define PDX_BASE_COMPUTERS_HPP
 
 #include "pdxearch/common.hpp"
 
@@ -48,4 +46,3 @@ public:
 
 }; // namespace PDX
 
-#endif // PDX_BASE_COMPUTERS_HPP
