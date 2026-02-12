@@ -10,8 +10,7 @@ namespace PDX {
 static constexpr float PROPORTION_HORIZONTAL_DIM = 0.75f;
 static constexpr size_t D_THRESHOLD_FOR_DCT_ROTATION = 512;
 static constexpr size_t PDX_VECTOR_SIZE = 64;
-static constexpr size_t PDX_MAX_DIMS = 4096;
-static constexpr size_t PDX_MIN_DIMS = 128;
+static constexpr size_t PDX_MAX_DIMS = 65536;
 static constexpr size_t MAX_EMBEDDINGS_PER_CLUSTER = 10240;
 
 static constexpr size_t H_DIM_SIZE = 64;

@@ -86,10 +86,9 @@ PhysicalOperator &PDXearchIndex::CreatePlan(PlanIndexInput &input) {
 	// https://github.com/cwida/PDX/blob/91618e01e574e594e27c71abfe3b1d5094657d53/python/pdxearch/index_base.py#L201-L204
 	// The maximum constraint is because of PDX_MAX_DIMS use in pdxearch.hpp.
 	const auto arr_dims = ArrayType::GetSize(arr_type);
-	if (arr_dims < PDX::PDX_MIN_DIMS || arr_dims > PDX::PDX_MAX_DIMS || arr_dims % 4 != 0) {
-		throw BinderException("PDXearch index FLOAT array length (i.e., dimensions) must be between %d and %d "
-		                      "(inclusive), and be divisible by 4, got %d",
-		                      PDX::PDX_MIN_DIMS, PDX::PDX_MAX_DIMS, arr_dims);
+	if (arr_dims > PDX::PDX_MAX_DIMS) {
+		throw BinderException("PDXearch index FLOAT array length (i.e., dimensions) must be lower than %d, got %d",
+		                      PDX::PDX_MAX_DIMS, arr_dims);
 	}
 
 	// Projection to execute expressions on the key columns
