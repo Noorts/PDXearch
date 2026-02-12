@@ -50,8 +50,8 @@ public:
 
 	uint8_t MAX_VALUE;
 
-	void PrepareQuery(const float *query, const float for_base, const float scale_factor,
-	                  int32_t *dim_clip_value, QUANTIZED_QUERY_TYPE *quantized_query) {
+	void PrepareQuery(const float *query, const float for_base, const float scale_factor, int32_t *dim_clip_value,
+	                  QUANTIZED_QUERY_TYPE *quantized_query) {
 		for (size_t i = 0; i < num_dimensions; ++i) {
 			// Scale factor is global in symmetric kernel
 			int rounded = static_cast<int>(std::round((query[i] - for_base) * scale_factor));

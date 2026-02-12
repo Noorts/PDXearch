@@ -15,8 +15,8 @@ static constexpr size_t PDX_MIN_DIMS = 128;
 static constexpr size_t MAX_EMBEDDINGS_PER_CLUSTER = 10240;
 
 static constexpr size_t H_DIM_SIZE = 64;
-static constexpr uint32_t DIMENSIONS_FETCHING_SIZES[24] = {
-	4, 4, 8, 8, 8, 16, 16, 32, 32, 32, 32, 64, 64, 64, 64, 128, 128, 128, 128, 256, 256, 512, 1024, 2048};
+static constexpr uint32_t DIMENSIONS_FETCHING_SIZES[24] = {4,  4,  8,  8,   8,   16,  16,  32,  32,  32,  32,   64,
+                                                           64, 64, 64, 128, 128, 128, 128, 256, 256, 512, 1024, 2048};
 
 template <class T, T val = 8>
 static constexpr uint32_t AlignValue(T n) {
@@ -25,12 +25,7 @@ static constexpr uint32_t AlignValue(T n) {
 
 enum class DistanceMetric { L2SQ, COSINE, IP };
 
-enum Quantization {
-	F32,
-	U8,
-	F16,
-	BF
-};
+enum Quantization { F32, U8, F16, BF };
 
 // TODO: Do the same for indexes?
 template <Quantization q>
@@ -153,4 +148,3 @@ static_assert(GetPDXDimensionSplit(1028).horizontal_dimensions == 768);
 static_assert(GetPDXDimensionSplit(1028).vertical_dimensions == 260);
 
 }; // namespace PDX
-
