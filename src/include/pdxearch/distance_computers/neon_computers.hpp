@@ -17,40 +17,21 @@ public:
 	using QUERY_TYPE = QuantizedVectorType_t<F32>;
 	using DATA_TYPE = DataType_t<F32>;
 
-	// Defer to the scalar kernel
-	template <bool USE_DIMENSIONS_REORDER, bool SKIP_PRUNED>
-	static void VerticalPruning(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t n_vectors,
-	                            size_t total_vectors, size_t start_dimension, size_t end_dimension,
-	                            DISTANCE_TYPE *distances_p, const uint32_t *pruning_positions,
-	                            const uint32_t *indices_dimensions, const int32_t *dim_clip_value,
-	                            const float *scaling_factors) {
+	template <bool SKIP_PRUNED>
+	static void Vertical(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t n_vectors,
+	                     size_t total_vectors, size_t start_dimension, size_t end_dimension,
+	                     DISTANCE_TYPE *distances_p, const uint32_t *pruning_positions,
+	                     const int32_t *dim_clip_value) {
 		size_t dimensions_jump_factor = total_vectors;
 		for (size_t dimension_idx = start_dimension; dimension_idx < end_dimension; ++dimension_idx) {
-			uint32_t true_dimension_idx = dimension_idx;
-			if constexpr (USE_DIMENSIONS_REORDER) {
-				true_dimension_idx = indices_dimensions[dimension_idx];
-			}
-			size_t offset_to_dimension_start = true_dimension_idx * dimensions_jump_factor;
+			size_t offset_to_dimension_start = dimension_idx * dimensions_jump_factor;
 			for (size_t vector_idx = 0; vector_idx < n_vectors; ++vector_idx) {
 				auto true_vector_idx = vector_idx;
 				if constexpr (SKIP_PRUNED) {
 					true_vector_idx = pruning_positions[vector_idx];
 				}
-				float to_multiply = query[true_dimension_idx] - data[offset_to_dimension_start + true_vector_idx];
+				float to_multiply = query[dimension_idx] - data[offset_to_dimension_start + true_vector_idx];
 				distances_p[true_vector_idx] += to_multiply * to_multiply;
-			}
-		}
-	}
-
-	// Defer to the scalar kernel
-	static void Vertical(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t start_dimension,
-	                     size_t end_dimension, DISTANCE_TYPE *distances_p, const float *scaling_factors) {
-		for (size_t dim_idx = start_dimension; dim_idx < end_dimension; dim_idx++) {
-			size_t dimension_idx = dim_idx;
-			size_t offset_to_dimension_start = dimension_idx * PDX_VECTOR_SIZE;
-			for (size_t vector_idx = 0; vector_idx < PDX_VECTOR_SIZE; ++vector_idx) {
-				float to_multiply = query[dimension_idx] - data[offset_to_dimension_start + vector_idx];
-				distances_p[vector_idx] += to_multiply * to_multiply;
 			}
 		}
 	}

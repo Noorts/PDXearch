@@ -35,12 +35,9 @@ class DistanceComputer<DistanceMetric::L2SQ, Quantization::F32> {
 #endif
 
 public:
-	constexpr static auto VerticalReorderedPruning = computer::VerticalPruning<true, true>;
-	constexpr static auto VerticalPruning = computer::VerticalPruning<false, true>;
-	constexpr static auto VerticalReordered = computer::VerticalPruning<true, false>;
-	constexpr static auto Vertical = computer::VerticalPruning<false, false>;
+	constexpr static auto VerticalPruning = computer::Vertical<true>;
+	constexpr static auto Vertical = computer::Vertical<false>;
 
-	constexpr static auto VerticalBlock = computer::Vertical;
 	constexpr static auto Horizontal = computer::Horizontal;
 };
 
