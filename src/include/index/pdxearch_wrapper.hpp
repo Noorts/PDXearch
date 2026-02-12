@@ -189,8 +189,7 @@ public:
 		}
 
 		// Note: the searcher depends on a fully initialized index in its constructor.
-		row_group.searcher = make_uniq<PDX::PDXearch<PDX::F32>>(*row_group.index, *row_group.pruner, 1,
-		                                                        PDX::DimensionsOrder::SEQUENTIAL);
+		row_group.searcher = make_uniq<PDX::PDXearch<PDX::F32>>(*row_group.index, *row_group.pruner);
 	}
 
 	void InitializeSearchForRowGroup(float *const preprocessed_query_embedding, const idx_t limit,
@@ -311,7 +310,7 @@ public:
 		}
 
 		// Note: the searcher depends on a fully initialized index in its constructor.
-		searcher = make_uniq<PDX::PDXearch<PDX::F32>>(*index, *pruner, 1, PDX::DimensionsOrder::SEQUENTIAL);
+		searcher = make_uniq<PDX::PDXearch<PDX::F32>>(*index, *pruner);
 	}
 
 	std::unique_ptr<std::vector<row_t>> Search(const float *const query_embedding, const idx_t limit,

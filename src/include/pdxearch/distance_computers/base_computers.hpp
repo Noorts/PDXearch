@@ -1,6 +1,4 @@
 #pragma once
-#ifndef PDX_BASE_COMPUTERS_HPP
-#define PDX_BASE_COMPUTERS_HPP
 
 #include "pdxearch/common.hpp"
 
@@ -25,15 +23,15 @@
 
 namespace PDX {
 
-template <DistanceFunction alpha, Quantization q>
+template <DistanceMetric alpha, Quantization q>
 class DistanceComputer {};
 
 template <>
-class DistanceComputer<L2, Quantization::F32> {
+class DistanceComputer<DistanceMetric::L2SQ, Quantization::F32> {
 #if !defined(__ARM_NEON) && !defined(__AVX2__) && !defined(__AVX512F__)
-	using computer = ScalarComputer<L2, F32>;
+	using computer = ScalarComputer<DistanceMetric::L2SQ, F32>;
 #else
-	using computer = SIMDComputer<L2, F32>;
+	using computer = SIMDComputer<DistanceMetric::L2SQ, F32>;
 #endif
 
 public:
@@ -47,5 +45,3 @@ public:
 };
 
 }; // namespace PDX
-
-#endif // PDX_BASE_COMPUTERS_HPP

@@ -109,8 +109,7 @@ private:
 public:
 	explicit EmbeddingPreprocessor(const size_t num_dimensions, const float *const rotation_matrix,
 	                               const float epsilon0)
-	    : pruner(num_dimensions, epsilon0, rotation_matrix), quantizer(), num_dimensions(num_dimensions) {
-		quantizer.SetD(num_dimensions);
+	    : pruner(num_dimensions, epsilon0, rotation_matrix), quantizer(num_dimensions), num_dimensions(num_dimensions) {
 	}
 
 	// Warning: modifies the input_embedding.

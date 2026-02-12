@@ -1,6 +1,4 @@
 #pragma once
-#ifndef PDX_NEON_COMPUTERS_HPP
-#define PDX_NEON_COMPUTERS_HPP
 
 #include <cstdint>
 #include <cstdio>
@@ -9,11 +7,11 @@
 
 namespace PDX {
 
-template <DistanceFunction alpha, Quantization q>
+template <DistanceMetric alpha, Quantization q>
 class SIMDComputer {};
 
 template <>
-class SIMDComputer<L2, Quantization::F32> {
+class SIMDComputer<DistanceMetric::L2SQ, Quantization::F32> {
 public:
 	using DISTANCE_TYPE = DistanceType_t<F32>;
 	using QUERY_TYPE = QuantizedVectorType_t<F32>;
@@ -87,5 +85,3 @@ public:
 };
 
 } // namespace PDX
-
-#endif // PDX_NEON_COMPUTERS_HPP

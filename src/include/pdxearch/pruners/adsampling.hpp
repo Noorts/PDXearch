@@ -1,5 +1,4 @@
-#ifndef PDX_ADSAMPLING_U8_HPP
-#define PDX_ADSAMPLING_U8_HPP
+#pragma once
 
 #include <Eigen/Dense>
 #include <queue>
@@ -126,5 +125,3 @@ private:
 };
 
 } // namespace PDX
-
-#endif // PDX_ADSAMPLING_U8_HPP

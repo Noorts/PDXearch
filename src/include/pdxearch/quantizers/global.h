@@ -1,5 +1,4 @@
-#ifndef PDX_QUANTIZERS_H
-#define PDX_QUANTIZERS_H
+#pragma once
 
 #include <cstdint>
 #include <cstdio>
@@ -11,6 +10,8 @@ namespace PDX {
 class Quantizer {
 
 public:
+	explicit Quantizer(size_t num_dimensions) : num_dimensions(num_dimensions) {
+	}
 	virtual ~Quantizer() = default;
 
 public:
@@ -29,11 +30,7 @@ public:
 			out[i] = src[i] / norm;
 		}
 	}
-	size_t num_dimensions = 0;
-
-	void SetD(size_t d) {
-		num_dimensions = d;
-	}
+	const size_t num_dimensions;
 
 	virtual void ScaleQuery(const float *src, int32_t *dst) {};
 };
@@ -42,10 +39,8 @@ template <Quantization q = U8>
 class Global8Quantizer : public Quantizer {
 public:
 	using QUANTIZED_QUERY_TYPE = QuantizedVectorType_t<q>;
-	alignas(64) inline static int32_t dim_clip_value[4096];
-	alignas(64) inline static QUANTIZED_QUERY_TYPE quantized_query[4096];
 
-	Global8Quantizer() {
+	explicit Global8Quantizer(size_t num_dimensions) : Quantizer(num_dimensions) {
 		if constexpr (q == Quantization::U8) {
 			MAX_VALUE = 255;
 		}
@@ -53,7 +48,8 @@ public:
 
 	uint8_t MAX_VALUE;
 
-	void PrepareQuery(const float *query, const float for_base, const float scale_factor) {
+	void PrepareQuery(const float *query, const float for_base, const float scale_factor, int32_t *dim_clip_value,
+	                  QUANTIZED_QUERY_TYPE *quantized_query) {
 		for (size_t i = 0; i < num_dimensions; ++i) {
 			// Scale factor is global in symmetric kernel
 			int rounded = static_cast<int>(std::round((query[i] - for_base) * scale_factor));
@@ -68,5 +64,3 @@ public:
 };
 
 }; // namespace PDX
-
-#endif // PDX_QUANTIZERS_H
