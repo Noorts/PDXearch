@@ -48,7 +48,7 @@ public:
 	BuildResultSetFromHeap(uint32_t k,
 	                       std::priority_queue<KNNCandidate_t, std::vector<KNNCandidate_t>, VectorComparator_t> &heap) {
 		// Pop the initialization element from the heap, as it can't be part of the result.
-		if (heap.size() > 0 && heap.top().distance == std::numeric_limits<float>::max()) {
+		if (!heap.empty() && heap.top().distance == std::numeric_limits<float>::max()) {
 			heap.pop();
 		}
 
