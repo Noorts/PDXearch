@@ -6,11 +6,11 @@
 
 namespace PDX {
 
-template <DistanceFunction alpha, Quantization q>
+template <DistanceMetric alpha, Quantization q>
 class ScalarComputer {};
 
 template <>
-class ScalarComputer<L2, Quantization::F32> {
+class ScalarComputer<DistanceMetric::L2SQ, Quantization::F32> {
 public:
 	using DISTANCE_TYPE = DistanceType_t<F32>;
 	using QUERY_TYPE = QuantizedVectorType_t<F32>;

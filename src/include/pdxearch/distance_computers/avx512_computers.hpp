@@ -9,16 +9,16 @@
 
 namespace PDX {
 
-template <DistanceFunction alpha, Quantization q>
+template <DistanceMetric alpha, Quantization q>
 class SIMDComputer {};
 
 template <>
-class SIMDComputer<L2, Quantization::F32> {
+class SIMDComputer<DistanceMetric::L2SQ, Quantization::F32> {
 public:
 	using DISTANCE_TYPE = DistanceType_t<F32>;
 	using QUERY_TYPE = QuantizedVectorType_t<F32>;
 	using DATA_TYPE = DataType_t<F32>;
-	using scalar_computer = ScalarComputer<L2, Quantization::F32>;
+	using scalar_computer = ScalarComputer<DistanceMetric::L2SQ, Quantization::F32>;
 
 	alignas(64) static DISTANCE_TYPE pruning_distances_tmp[4096];
 
