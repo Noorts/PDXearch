@@ -29,11 +29,6 @@ if(CLANG_TIDY)
   add_definitions(-DEIGEN_DONT_PARALLELIZE)
 endif()
 
-set(FAISS_ENABLE_GPU OFF)
-set(FAISS_ENABLE_PYTHON OFF)
-set(BUILD_TESTING OFF)
-add_subdirectory(third_party/faiss)
-
 # SuperKMeans is a header-only library.
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/SuperKMeans/include)
 
@@ -43,15 +38,44 @@ build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 target_link_libraries(${EXTENSION_NAME} OpenMP::OpenMP_CXX)
 target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenMP::OpenMP_CXX)
 
-add_definitions(-DEIGEN_USE_BLAS)
-target_link_libraries(${EXTENSION_NAME} Eigen3::Eigen)
-target_link_libraries(${LOADABLE_EXTENSION_NAME} Eigen3::Eigen)
+# Based on SuperKMeans CMakeLists:
+# https://github.com/lkuffo/SuperKMeans/blob/8d64661520845d587f52283962bf482233788f4c/CMakeLists.txt#L31-L55
+set(MKL_INTERFACE_FULL "intel_lp64")
+find_package(MKL CONFIG QUIET)
+if (MKL_FOUND)
+  message(STATUS "MKL library found")
+  message(STATUS "MKL targets: ${MKL_IMPORTED_TARGETS}")
+  get_target_property(mkl_includes MKL::MKL INTERFACE_INCLUDE_DIRECTORIES)
+  message(STATUS "MKL includes: ${mkl_includes}")
+  add_definitions(-DEIGEN_USE_MKL_ALL)
+  set(MKL_COMMON_LIBS MKL::MKL OpenMP::OpenMP_CXX m dl)
+  set(BLAS_LINK_LIBRARIES "")
+else()
+  set(MKL_COMMON_LIBS "")
+  message(STATUS "MKL not found. Trying to find a BLAS implementation")
 
-target_link_libraries(${EXTENSION_NAME} faiss)
-target_link_libraries(${LOADABLE_EXTENSION_NAME} faiss)
+  # On macOS, prefer Apple's Accelerate framework over other BLAS implementations
+  if(APPLE)
+      set(BLA_VENDOR Apple)
+      message(STATUS "macOS detected: prioritizing Apple Accelerate framework")
+  endif()
+
+  find_package(BLAS REQUIRED)
+  message(STATUS "BLAS library found: ${BLAS_LIBRARIES}")
+  add_definitions(-DEIGEN_USE_BLAS)
+  set(BLAS_LINK_LIBRARIES ${BLAS_LIBRARIES} OpenMP::OpenMP_CXX)
+endif()
+
+if(MKL_FOUND)
+  target_link_libraries(${EXTENSION_NAME} Eigen3::Eigen ${MKL_COMMON_LIBS})
+  target_link_libraries(${LOADABLE_EXTENSION_NAME} Eigen3::Eigen ${MKL_COMMON_LIBS})
+else()
+  target_link_libraries(${EXTENSION_NAME} Eigen3::Eigen ${BLAS_LINK_LIBRARIES})
+  target_link_libraries(${LOADABLE_EXTENSION_NAME} Eigen3::Eigen ${BLAS_LINK_LIBRARIES})
+endif()
 
 install(
-  TARGETS ${EXTENSION_NAME} faiss
+  TARGETS ${EXTENSION_NAME}
   EXPORT "${DUCKDB_EXPORT_SET}"
   LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
   ARCHIVE DESTINATION "${INSTALL_LIB_DIR}")
