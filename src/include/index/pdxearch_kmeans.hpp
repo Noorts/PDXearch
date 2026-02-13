@@ -36,7 +36,7 @@ struct KMeansResult {
 
 	// Compute centroids
 	skmeans::SuperKMeansConfig config;
-	config.sampling_fraction = 1.0f;
+	config.sampling_fraction = 0.3f;
 	config.angular = distance_metric == PDX::DistanceMetric::COSINE || distance_metric == PDX::DistanceMetric::IP;
 	config.data_already_rotated = true;
 	auto kmeans = skmeans::SuperKMeans(num_clusters, num_dimensions, config);
