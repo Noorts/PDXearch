@@ -112,15 +112,11 @@ lessons learned from other extensions.
 - **[PDX](https://github.com/cwida/pdx)**: We use the PDX data layout and
   PDXearch framework.
 
+- **[Super K-Means](https://github.com/lkuffo/SuperKMeans)**: We use
+  the Super K-Means library for fast k-means clustering.
+
 - **[VSS](https://github.com/duckdb/duckdb-vss)**: We've taken inspiration from
   the VSS interface and we reuse parts of the VSS extension's code.
-
-- **[Faiss](https://github.com/facebookresearch/faiss)**: We currently use
-  Meta's Faiss library for its K-means capabilities.
-
-- **[DuckDB-Faiss](https://github.com/duckdb-faiss-ext/duckdb-faiss-ext)**:
-  We've taken inspiration from its build setup to include Faiss in the
-  extension. This is yet another alternative DuckDB VSS extension.
 
 ## License
 
