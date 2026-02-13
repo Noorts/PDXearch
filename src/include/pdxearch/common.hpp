@@ -108,7 +108,7 @@ struct PDXDimensionSplit {
 	if (num_dimensions <= 128) {
 		local_proportion_horizontal_dim = 0.25;
 	}
-	auto horizontal_d = static_cast<uint32_t>(num_dimensions * local_proportion_horizontal_dim);
+	auto horizontal_d = static_cast<uint32_t>(static_cast<float>(num_dimensions) * local_proportion_horizontal_dim);
 	auto vertical_d = static_cast<uint32_t>(num_dimensions - horizontal_d);
 	if (horizontal_d % H_DIM_SIZE > 0) {
 		horizontal_d = ((horizontal_d + H_DIM_SIZE / 2) / H_DIM_SIZE) * H_DIM_SIZE;
