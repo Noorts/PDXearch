@@ -7,16 +7,12 @@
 
 namespace PDX {
 
-static constexpr float PROPORTION_VERTICAL_DIM = 0.25;
+static constexpr float PROPORTION_HORIZONTAL_DIM = 0.75f;
 static constexpr size_t D_THRESHOLD_FOR_DCT_ROTATION = 512;
-static constexpr size_t PDX_VECTOR_SIZE = 64;
-static constexpr size_t PDX_MAX_DIMS = 4096;
-static constexpr size_t PDX_MIN_DIMS = 128;
-static constexpr size_t MAX_EMBEDDINGS_PER_CLUSTER = 10240;
-
+static constexpr size_t PDX_MAX_DIMS = 65536;
 static constexpr size_t H_DIM_SIZE = 64;
-static constexpr uint32_t DIMENSIONS_FETCHING_SIZES[24] = {4,  4,  8,  8,   8,   16,  16,  32,  32,  32,  32,   64,
-                                                           64, 64, 64, 128, 128, 128, 128, 256, 256, 512, 1024, 2048};
+static constexpr uint32_t DIMENSIONS_FETCHING_SIZES[20] = {16,  16,  32,  32,  32,  32,  64,  64,   64,   64,
+                                                           128, 128, 128, 128, 256, 256, 512, 1024, 2048, 65536};
 
 template <class T, T val = 8>
 static constexpr uint32_t AlignValue(T n) {
@@ -108,32 +104,47 @@ struct PDXDimensionSplit {
 };
 
 [[nodiscard]] static inline constexpr PDXDimensionSplit GetPDXDimensionSplit(const uint32_t num_dimensions) {
-	// Based on the original PDX code (see link) but with PROPORTION_VERTICAL_DIM fixed (in the original code the
-	// constant represents the horizontal, not the vertical portion):
-	// https://github.com/cwida/PDX/blob/4a2e65e90e177155c42d277b5523c4fd2fa35540/python/pdxearch/index_base.py#L119-L127
-
-	assert(num_dimensions % 4 == 0);
-	assert(num_dimensions >= PDX_MIN_DIMS);
-	assert(num_dimensions <= PDX_MAX_DIMS);
-
-	// Special case for 128 dimensions, to avoid {128, 0} split.
-	if (num_dimensions == 128) {
-		return {64, 64};
+	auto local_proportion_horizontal_dim = PROPORTION_HORIZONTAL_DIM;
+	if (num_dimensions <= 128) {
+		local_proportion_horizontal_dim = 0.25;
+	}
+	auto horizontal_d = static_cast<uint32_t>(static_cast<float>(num_dimensions) * local_proportion_horizontal_dim);
+	auto vertical_d = static_cast<uint32_t>(num_dimensions - horizontal_d);
+	if (horizontal_d % H_DIM_SIZE > 0) {
+		horizontal_d = ((horizontal_d + H_DIM_SIZE / 2) / H_DIM_SIZE) * H_DIM_SIZE;
+		vertical_d = num_dimensions - horizontal_d;
+	}
+	if (!vertical_d) {
+		horizontal_d = H_DIM_SIZE;
+		vertical_d = num_dimensions - horizontal_d;
+	}
+	if (num_dimensions <= H_DIM_SIZE) {
+		horizontal_d = 0;
+		vertical_d = num_dimensions;
 	}
 
-	uint32_t v_dims = static_cast<uint32_t>(static_cast<float>(num_dimensions) * PDX::PROPORTION_VERTICAL_DIM);
-	uint32_t h_dims = num_dimensions - v_dims;
+	assert(horizontal_d + vertical_d == num_dimensions);
 
-	// Round the horizontal dimensions to the nearest multiple of PDX_VECTOR_SIZE.
-	if (h_dims % PDX_VECTOR_SIZE != 0) {
-		h_dims = ((h_dims + PDX_VECTOR_SIZE / 2) / PDX_VECTOR_SIZE) * PDX_VECTOR_SIZE;
-		v_dims = num_dimensions - h_dims;
-	}
-
-	assert(h_dims + v_dims == num_dimensions);
-
-	return {h_dims, v_dims};
+	return {horizontal_d, vertical_d};
 };
+
+static_assert(GetPDXDimensionSplit(4).horizontal_dimensions == 0);
+static_assert(GetPDXDimensionSplit(4).vertical_dimensions == 4);
+
+static_assert(GetPDXDimensionSplit(33).horizontal_dimensions == 0);
+static_assert(GetPDXDimensionSplit(33).vertical_dimensions == 33);
+
+static_assert(GetPDXDimensionSplit(64).horizontal_dimensions == 0);
+static_assert(GetPDXDimensionSplit(64).vertical_dimensions == 64);
+
+static_assert(GetPDXDimensionSplit(65).horizontal_dimensions == 0);
+static_assert(GetPDXDimensionSplit(65).vertical_dimensions == 65);
+
+static_assert(GetPDXDimensionSplit(100).horizontal_dimensions == 0);
+static_assert(GetPDXDimensionSplit(100).vertical_dimensions == 100);
+
+static_assert(GetPDXDimensionSplit(127).horizontal_dimensions == 0);
+static_assert(GetPDXDimensionSplit(127).vertical_dimensions == 127);
 
 static_assert(GetPDXDimensionSplit(128).horizontal_dimensions == 64);
 static_assert(GetPDXDimensionSplit(128).vertical_dimensions == 64);
@@ -147,4 +158,4 @@ static_assert(GetPDXDimensionSplit(1024).vertical_dimensions == 256);
 static_assert(GetPDXDimensionSplit(1028).horizontal_dimensions == 768);
 static_assert(GetPDXDimensionSplit(1028).vertical_dimensions == 260);
 
-}; // namespace PDX
+} // namespace PDX

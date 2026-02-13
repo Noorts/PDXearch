@@ -63,8 +63,6 @@ struct KMeansResult {
 	// Extract assignments
 	for (uint64_t cluster_idx = 0; cluster_idx < num_clusters; cluster_idx++) {
 		const size_t cluster_size = faiss_index.invlists->list_size(cluster_idx);
-		D_ASSERT(0 < cluster_size);
-		D_ASSERT(cluster_size <= PDX::MAX_EMBEDDINGS_PER_CLUSTER);
 		result.assignments[cluster_idx].reserve(cluster_size);
 
 		const faiss::idx_t *faiss_ids = faiss_index.invlists->get_ids(cluster_idx);

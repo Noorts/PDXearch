@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <cstdio>
 #include <cmath>
 #include "pdxearch/common.hpp"
 
@@ -31,8 +30,6 @@ public:
 		}
 	}
 	const size_t num_dimensions;
-
-	virtual void ScaleQuery(const float *src, int32_t *dst) {};
 };
 
 template <Quantization q = U8>
@@ -41,12 +38,9 @@ public:
 	using QUANTIZED_QUERY_TYPE = QuantizedVectorType_t<q>;
 
 	explicit Global8Quantizer(size_t num_dimensions) : Quantizer(num_dimensions) {
-		if constexpr (q == Quantization::U8) {
-			MAX_VALUE = 255;
-		}
 	}
 
-	uint8_t MAX_VALUE;
+	uint8_t MAX_VALUE = 255;
 
 	void PrepareQuery(const float *query, const float for_base, const float scale_factor, int32_t *dim_clip_value,
 	                  QUANTIZED_QUERY_TYPE *quantized_query) {
@@ -63,4 +57,4 @@ public:
 	};
 };
 
-}; // namespace PDX
+} // namespace PDX
