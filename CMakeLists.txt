@@ -22,13 +22,6 @@ endif()
 find_package(OpenMP REQUIRED)
 find_package(Eigen3 REQUIRED)
 
-# Remove OpenMP dependency for CI clang-tidy job. This workaround can be removed if we remove our Eigen dependency.
-# Defining EIGEN_DONT_PARALLELIZE prevents Eigen from including the <omp.h>, which the clang-tidy CI is not properly set
-# up to use. The CI's build and test job will ensure the extension remains buildable across platforms and architectures.
-if(CLANG_TIDY)
-  add_definitions(-DEIGEN_DONT_PARALLELIZE)
-endif()
-
 # SuperKMeans is a header-only library.
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/SuperKMeans/include)
 
