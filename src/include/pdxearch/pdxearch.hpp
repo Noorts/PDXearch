@@ -459,7 +459,6 @@ public:
 	                   const int32_t *dim_clip_value, uint8_t *selection_vector, uint32_t passing_tuples) {
 		ResetPruningDistances<Q>(n_vectors, pruning_distances);
 		size_t n_vectors_not_pruned = 0;
-		DistanceType_t<Q> pruning_threshold = std::numeric_limits<DistanceType_t<Q>>::max();
 		float selection_percentage = (static_cast<float>(passing_tuples) / static_cast<float>(n_vectors));
 		InitPositionsArrayFromSelectionVector<Q>(n_vectors, n_vectors_not_pruned, pruning_positions, selection_vector);
 		// Always start with horizontal block, regardless of selectivity
