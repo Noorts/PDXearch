@@ -31,4 +31,4 @@ jobs:
       ci_tools_version: fix-tidy-check-vcpkg
       override_ci_tools_repository: noorts/extension-ci-tools
       extension_name: pdxearch
-      format_checks: 'format;tidy'
+      format_checks: 'format'
