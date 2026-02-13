@@ -23,7 +23,7 @@ public:
 	const uint32_t num_horizontal_dimensions {};
 	std::vector<CLUSTER_TYPE> clusters;
 	const bool is_normalized {};
-	std::unique_ptr<float[]> centroids {};
+	std::vector<float> centroids;
 
 	IndexPDXIVF(uint32_t num_dimensions, uint64_t total_num_embeddings, uint32_t num_clusters, bool is_normalized)
 	    : num_dimensions(num_dimensions), total_num_embeddings(total_num_embeddings), num_clusters(num_clusters),

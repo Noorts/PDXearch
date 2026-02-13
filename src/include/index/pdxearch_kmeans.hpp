@@ -9,7 +9,7 @@ namespace duckdb {
 
 struct KMeansResult {
 	// Row-major buffer of all centroids (num_clusters * num_dimensions).
-	std::unique_ptr<float[]> centroids;
+	std::vector<float> centroids;
 
 	// Mapping from a centroid to its embeddings.
 	//
@@ -20,9 +20,7 @@ struct KMeansResult {
 	// cluster/centroid.
 	std::vector<std::vector<uint64_t>> assignments;
 
-	KMeansResult(uint32_t num_dimensions, uint32_t num_clusters)
-	    : centroids(std::make_unique<float[]>(static_cast<size_t>(num_clusters * num_dimensions))),
-	      assignments(num_clusters) {
+	explicit KMeansResult(uint32_t num_clusters) : assignments(num_clusters) {
 	}
 };
 
@@ -34,7 +32,7 @@ struct KMeansResult {
 	D_ASSERT(num_dimensions >= 1);
 	D_ASSERT(num_clusters >= 1);
 
-	auto result = KMeansResult(num_dimensions, num_clusters);
+	auto result = KMeansResult(num_clusters);
 
 	// Compute centroids
 	skmeans::SuperKMeansConfig config;
@@ -42,14 +40,12 @@ struct KMeansResult {
 	config.angular = distance_metric == PDX::DistanceMetric::COSINE || distance_metric == PDX::DistanceMetric::IP;
 	config.data_already_rotated = true;
 	auto kmeans = skmeans::SuperKMeans(num_clusters, num_dimensions, config);
-	std::vector<float> centroids = kmeans.Train(embeddings, num_embeddings);
-
-	// Extract centroids
-	std::memcpy(result.centroids.get(), centroids.data(), centroids.size() * sizeof(float));
+	result.centroids = kmeans.Train(embeddings, num_embeddings);
 
 	// Extract assignments
 	// SuperKMeans returns assignment from vec_id (not row_id) to centroid_idx
-	std::vector<uint32_t> assignments = kmeans.Assign(embeddings, centroids.data(), num_embeddings, num_clusters);
+	std::vector<uint32_t> assignments =
+	    kmeans.Assign(embeddings, result.centroids.data(), num_embeddings, num_clusters);
 	// Convert into assignment from centroid_idx to vec_id (not row_id)
 	result.assignments.resize(num_clusters);
 	for (uint64_t vec_id = 0; vec_id < num_embeddings; vec_id++) {

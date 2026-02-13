@@ -174,7 +174,7 @@ protected:
 		std::unique_ptr<float[]> distances_to_centroids(new float[data.num_clusters]);
 		for (size_t cluster_idx = 0; cluster_idx < data.num_clusters; cluster_idx++) {
 			distances_to_centroids[cluster_idx] = DistanceComputer<DistanceMetric::L2SQ, F32>::Horizontal(
-			    query, data.centroids.get() + cluster_idx * data.num_dimensions, data.num_dimensions, nullptr);
+			    query, data.centroids.data() + cluster_idx * data.num_dimensions, data.num_dimensions, nullptr);
 		}
 		std::iota(clusters_indices, clusters_indices + data.num_clusters, static_cast<uint32_t>(0));
 		if (nprobe >= data.num_clusters) {
