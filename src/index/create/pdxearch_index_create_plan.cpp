@@ -84,8 +84,9 @@ PhysicalOperator &PDXearchIndex::CreatePlan(PlanIndexInput &input) {
 
 	const auto arr_dims = ArrayType::GetSize(arr_type);
 	if (arr_dims > PDX::PDX_MAX_DIMS) {
-		throw BinderException("PDXearch index FLOAT array length (i.e., dimensions) must be lower than %d, got %d",
-		                      PDX::PDX_MAX_DIMS, arr_dims);
+		throw BinderException(
+		    "PDXearch index FLOAT array length (i.e., dimensions) must be less than or equal to %d, got %d",
+		    PDX::PDX_MAX_DIMS, arr_dims);
 	}
 
 	// Projection to execute expressions on the key columns
