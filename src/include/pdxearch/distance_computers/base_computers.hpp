@@ -41,4 +41,4 @@ public:
 	constexpr static auto Horizontal = computer::Horizontal;
 };
 
-}; // namespace PDX
+} // namespace PDX

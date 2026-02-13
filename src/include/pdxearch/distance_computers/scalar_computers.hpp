@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <cstdio>
 #include "pdxearch/common.hpp"
 
 namespace PDX {
@@ -37,6 +36,7 @@ public:
 	static DISTANCE_TYPE Horizontal(const QUERY_TYPE *__restrict vector1, const DATA_TYPE *__restrict vector2,
 	                                size_t num_dimensions, const float *scaling_factors = nullptr) {
 		DISTANCE_TYPE distance = 0.0;
+#pragma clang loop vectorize(enable)
 		for (size_t dimension_idx = 0; dimension_idx < num_dimensions; ++dimension_idx) {
 			DISTANCE_TYPE to_multiply = vector1[dimension_idx] - vector2[dimension_idx];
 			distance += to_multiply * to_multiply;

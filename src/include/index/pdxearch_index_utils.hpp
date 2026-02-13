@@ -6,7 +6,7 @@
 #include "duckdb/storage/storage_info.hpp"
 #include "pdxearch/common.hpp"
 #include "pdxearch/index_base/pdx_ivf.hpp"
-#include "pdxearch/quantizers/global.h"
+#include "pdxearch/quantizers/global.hpp"
 #include "pdxearch/pruners/adsampling.hpp"
 
 namespace duckdb {

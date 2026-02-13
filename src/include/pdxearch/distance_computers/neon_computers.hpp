@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <cstdio>
 #include "arm_neon.h"
 #include "pdxearch/common.hpp"
 
@@ -29,7 +28,7 @@ public:
 				if constexpr (SKIP_PRUNED) {
 					true_vector_idx = pruning_positions[vector_idx];
 				}
-				float to_multiply = query[dimension_idx] - data[offset_to_dimension_start + true_vector_idx];
+				DISTANCE_TYPE to_multiply = query[dimension_idx] - data[offset_to_dimension_start + true_vector_idx];
 				distances_p[true_vector_idx] += to_multiply * to_multiply;
 			}
 		}
@@ -38,10 +37,10 @@ public:
 	static DISTANCE_TYPE Horizontal(const QUERY_TYPE *__restrict vector1, const DATA_TYPE *__restrict vector2,
 	                                size_t num_dimensions, const float *scaling_factors = nullptr) {
 #if defined(__APPLE__)
-		float distance = 0.0;
+		DISTANCE_TYPE distance = 0.0;
 #pragma clang loop vectorize(enable)
 		for (size_t i = 0; i < num_dimensions; ++i) {
-			float diff = vector1[i] - vector2[i];
+			DISTANCE_TYPE diff = vector1[i] - vector2[i];
 			distance += diff * diff;
 		}
 		return distance;
@@ -56,7 +55,7 @@ public:
 		}
 		DISTANCE_TYPE distance = vaddvq_f32(sum_vec);
 		for (; i < num_dimensions; ++i) {
-			float diff = vector1[i] - vector2[i];
+			DISTANCE_TYPE diff = vector1[i] - vector2[i];
 			distance += diff * diff;
 		}
 		return distance;

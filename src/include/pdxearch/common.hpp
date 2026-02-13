@@ -11,8 +11,8 @@ static constexpr float PROPORTION_HORIZONTAL_DIM = 0.75f;
 static constexpr size_t D_THRESHOLD_FOR_DCT_ROTATION = 512;
 static constexpr size_t PDX_MAX_DIMS = 65536;
 static constexpr size_t H_DIM_SIZE = 64;
-static constexpr uint32_t DIMENSIONS_FETCHING_SIZES[24] = {4,  4,  8,  8,   8,   16,  16,  32,  32,  32,  32,   64,
-                                                           64, 64, 64, 128, 128, 128, 128, 256, 256, 512, 1024, 2048};
+static constexpr uint32_t DIMENSIONS_FETCHING_SIZES[20] = {16,  16,  32,  32,  32,  32,  64,  64,   64,   64,
+                                                           128, 128, 128, 128, 256, 256, 512, 1024, 2048, 65536};
 
 template <class T, T val = 8>
 static constexpr uint32_t AlignValue(T n) {
@@ -128,6 +128,24 @@ struct PDXDimensionSplit {
 	return {horizontal_d, vertical_d};
 };
 
+static_assert(GetPDXDimensionSplit(4).horizontal_dimensions == 0);
+static_assert(GetPDXDimensionSplit(4).vertical_dimensions == 4);
+
+static_assert(GetPDXDimensionSplit(33).horizontal_dimensions == 0);
+static_assert(GetPDXDimensionSplit(33).vertical_dimensions == 33);
+
+static_assert(GetPDXDimensionSplit(64).horizontal_dimensions == 0);
+static_assert(GetPDXDimensionSplit(64).vertical_dimensions == 64);
+
+static_assert(GetPDXDimensionSplit(65).horizontal_dimensions == 0);
+static_assert(GetPDXDimensionSplit(65).vertical_dimensions == 65);
+
+static_assert(GetPDXDimensionSplit(100).horizontal_dimensions == 0);
+static_assert(GetPDXDimensionSplit(100).vertical_dimensions == 100);
+
+static_assert(GetPDXDimensionSplit(127).horizontal_dimensions == 0);
+static_assert(GetPDXDimensionSplit(127).vertical_dimensions == 127);
+
 static_assert(GetPDXDimensionSplit(128).horizontal_dimensions == 64);
 static_assert(GetPDXDimensionSplit(128).vertical_dimensions == 64);
 
@@ -140,4 +158,4 @@ static_assert(GetPDXDimensionSplit(1024).vertical_dimensions == 256);
 static_assert(GetPDXDimensionSplit(1028).horizontal_dimensions == 768);
 static_assert(GetPDXDimensionSplit(1028).vertical_dimensions == 260);
 
-}; // namespace PDX
+} // namespace PDX

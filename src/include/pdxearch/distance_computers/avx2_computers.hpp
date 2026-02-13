@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <cstdio>
 #include <immintrin.h>
 #include "pdxearch/common.hpp"
 #include "pdxearch/distance_computers/scalar_computers.hpp"
@@ -19,8 +18,6 @@ public:
 	using DATA_TYPE = DataType_t<F32>;
 	using scalar_computer = ScalarComputer<DistanceMetric::L2SQ, Quantization::F32>;
 
-	alignas(64) static DISTANCE_TYPE pruning_distances_tmp[4096];
-
 	template <bool SKIP_PRUNED>
 	static void Vertical(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t n_vectors,
 	                     size_t total_vectors, size_t start_dimension, size_t end_dimension, DISTANCE_TYPE *distances_p,
@@ -33,14 +30,14 @@ public:
 				if constexpr (SKIP_PRUNED) {
 					true_vector_idx = pruning_positions[vector_idx];
 				}
-				float to_multiply = query[dimension_idx] - data[offset_to_dimension_start + true_vector_idx];
+				DISTANCE_TYPE to_multiply = query[dimension_idx] - data[offset_to_dimension_start + true_vector_idx];
 				distances_p[true_vector_idx] += to_multiply * to_multiply;
 			}
 		}
 	}
 
 	static DISTANCE_TYPE Horizontal(const QUERY_TYPE *__restrict vector1, const DATA_TYPE *__restrict vector2,
-	                                size_t num_dimensions) {
+	                                size_t num_dimensions, const float *scaling_factors = nullptr) {
 		__m256 d2_vec = _mm256_setzero_ps();
 		size_t i = 0;
 		for (; i + 8 <= num_dimensions; i += 8) {
@@ -75,7 +72,7 @@ public:
 		double d2 = _mm_cvtsd_f64(sum128);
 
 		for (; i < num_dimensions; ++i) {
-			float d = vector1[i] - vector2[i];
+			DISTANCE_TYPE d = vector1[i] - vector2[i];
 			d2 += d * d;
 		}
 

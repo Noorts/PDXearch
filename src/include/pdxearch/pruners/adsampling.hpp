@@ -88,7 +88,7 @@ public:
 	}
 
 private:
-	float epsilon0 = 2.1;
+	float epsilon0 = 1.5;
 	Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> matrix;
 	std::vector<float> ratios;
 
@@ -96,7 +96,7 @@ private:
 		if (visited_dimensions == 0) {
 			return 1;
 		}
-		if (visited_dimensions == static_cast<int>(num_dimensions)) {
+		if (visited_dimensions == num_dimensions) {
 			return 1.0;
 		}
 		return static_cast<float>(visited_dimensions) / num_dimensions *
