@@ -169,7 +169,7 @@ protected:
 		distances_to_centroids.resize(data.num_clusters);
 		for (size_t cluster_idx = 0; cluster_idx < data.num_clusters; cluster_idx++) {
 			distances_to_centroids[cluster_idx] = DistanceComputer<DistanceMetric::L2SQ, F32>::Horizontal(
-			    query, data.centroids.get() + cluster_idx * data.num_dimensions, data.num_dimensions, nullptr);
+			    query, data.centroids.data() + cluster_idx * data.num_dimensions, data.num_dimensions, nullptr);
 		}
 		clusters_indices.resize(data.num_clusters);
 		std::iota(clusters_indices.begin(), clusters_indices.end(), 0);
