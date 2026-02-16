@@ -19,7 +19,6 @@ namespace duckdb {
 
 class PDXearchWrapper {
 public:
-	static constexpr float EPSILON0 = 1.5;
 	static constexpr PDX::DistanceMetric DEFAULT_DISTANCE_METRIC = PDX::DistanceMetric::L2SQ;
 	static constexpr PDX::Quantization DEFAULT_QUANTIZATION = PDX::Quantization::F32;
 	static constexpr int32_t DEFAULT_N_PROBE = 128;
@@ -151,7 +150,7 @@ public:
 
 		row_group.index = make_uniq<PDX::IndexPDXIVF<PDX::F32>>(num_dimensions, num_embeddings,
 		                                                        num_clusters_per_row_group, IsNormalized());
-		row_group.pruner = make_uniq<PDX::ADSamplingPruner<PDX::F32>>(num_dimensions, EPSILON0, rotation_matrix.get());
+		row_group.pruner = make_uniq<PDX::ADSamplingPruner<PDX::F32>>(num_dimensions, rotation_matrix.get());
 
 		// Compute K-means centroids and embedding-to-centroid assignment.
 		KMeansResult kmeans_result =
@@ -267,7 +266,7 @@ public:
 	      row_id_cluster_mapping(estimated_cardinality),
 	      index(make_uniq<PDX::IndexPDXIVF<PDX::F32>>(num_dimensions, estimated_cardinality, num_clusters,
 	                                                  IsNormalized())),
-	      pruner(make_uniq<PDX::ADSamplingPruner<PDX::F32>>(num_dimensions, EPSILON0, rotation_matrix.get())) {
+	      pruner(make_uniq<PDX::ADSamplingPruner<PDX::F32>>(num_dimensions, rotation_matrix.get())) {
 		// Additional constraints on the number of dimensions are enforced in `pdxearch_index_plan.cpp`.
 		D_ASSERT(num_dimensions > 0);
 		D_ASSERT(estimated_cardinality > 0);

@@ -40,7 +40,7 @@ public:
 	      embeddings(make_uniq_array<float>(max_num_embeddings * num_dimensions)),
 	      row_ids(make_uniq_array<row_t>(max_num_embeddings)),
 	      embedding_preprocessor(make_uniq<EmbeddingPreprocessor>(
-	          num_dimensions, global_index->Cast<PDXearchIndex>().GetRotationMatrix(), PDXearchWrapper::EPSILON0)),
+	          num_dimensions, global_index->Cast<PDXearchIndex>().GetRotationMatrix())),
 	      is_normalized(global_index->Cast<PDXearchIndex>().IsNormalized()) {
 	}
 	unique_ptr<BoundIndex> global_index;

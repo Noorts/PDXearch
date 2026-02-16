@@ -36,8 +36,8 @@ class ADSamplingPruner {
 public:
 	const uint32_t num_dimensions;
 
-	ADSamplingPruner(const uint32_t num_dimensions, const float epsilon0, const float *matrix_p)
-	    : num_dimensions(num_dimensions), epsilon0(epsilon0) {
+	ADSamplingPruner(const uint32_t num_dimensions, const float *matrix_p)
+	    : num_dimensions(num_dimensions){
 		ratios.resize(num_dimensions);
 		for (size_t i = 0; i < num_dimensions; ++i) {
 			ratios[i] = GetRatio(i);
@@ -56,8 +56,8 @@ public:
 #endif
 	}
 
-	void SetEpsilon0(const float epsilon0) {
-		ADSamplingPruner::epsilon0 = epsilon0;
+	void SetPruningAggresiveness(const float pruning_aggressiveness) {
+		ADSamplingPruner::pruning_aggressiveness = pruning_aggressiveness;
 		for (size_t i = 0; i < num_dimensions; ++i) {
 			ratios[i] = GetRatio(i);
 		}
@@ -88,7 +88,7 @@ public:
 	}
 
 private:
-	float epsilon0 = 1.5;
+	float pruning_aggressiveness = ADSAMPLING_PRUNING_AGGRESIVENESS;
 	Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> matrix;
 	std::vector<float> ratios;
 
@@ -100,7 +100,7 @@ private:
 			return 1.0;
 		}
 		return static_cast<float>(visited_dimensions) / num_dimensions *
-		       (1.0 + epsilon0 / std::sqrt(visited_dimensions)) * (1.0 + epsilon0 / std::sqrt(visited_dimensions));
+		       (1.0 + pruning_aggressiveness / std::sqrt(visited_dimensions)) * (1.0 + pruning_aggressiveness / std::sqrt(visited_dimensions));
 	}
 
 	/**
@@ -117,7 +117,7 @@ private:
 	 * @param n Number of embeddings to rotate
 	 */
 	void Rotate(const VALUE_TYPE *SKM_RESTRICT const embeddings, VALUE_TYPE *SKM_RESTRICT const out_buffer,
-	            const uint32_t n) const {
+	            const size_t n) const {
 		Eigen::Map<const MatrixR> embeddings_matrix(embeddings, n, num_dimensions);
 		Eigen::Map<MatrixR> out(out_buffer, n, num_dimensions);
 		out.noalias() = embeddings_matrix * matrix.transpose();
