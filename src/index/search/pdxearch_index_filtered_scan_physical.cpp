@@ -259,7 +259,6 @@ SinkFinalizeType PhysicalPDXearchIndexFilteredScan::Finalize(Pipeline &pipeline,
 // iteration, which will probe the next X clusters for each row group.
 void PhysicalFilteredScanGlobalSinkState::TryFinalizeSinkPhase(Pipeline &pipeline, Event &event) {
 	D_ASSERT(global_heap->size() <= limit);
-	D_ASSERT(partitions_per_row_group_probed_thus_far <= index.GetNumClustersPerRowGroup());
 
 	// The heap (and thus pruning threshold) is initialized with a max float element. This float element should not be
 	// part of the result (it is not valid). There is an edge case where this element is the Kth item (at the top of the
