@@ -31,14 +31,14 @@ public:
 
 	PDXearch(INDEX_TYPE &data_index, Pruner &pruner)
 	    : quantizer(data_index.num_dimensions), pruner(pruner), pdx_data(data_index),
+	      cluster_offsets(new size_t[data_index.num_clusters]),
+	      cluster_indices_in_access_order(new uint32_t[data_index.num_clusters]),
 	      dim_clip_value(new int32_t[data_index.num_dimensions]()),
 	      quantized_query_buf(new QUANTIZED_VECTOR_TYPE[data_index.num_dimensions]) {
-		cluster_indices_in_access_order.reset(new uint32_t[pdx_data.num_clusters]);
-		cluster_offsets.reset(new size_t[pdx_data.num_clusters]);
-		for (size_t i = 0; i < pdx_data.num_clusters; ++i) {
+		for (size_t i = 0; i < data_index.num_clusters; ++i) {
 			cluster_offsets[i] = total_embeddings;
-			total_embeddings += pdx_data.clusters[i].num_embeddings;
-			max_cluster_size = std::max(max_cluster_size, static_cast<size_t>(pdx_data.clusters[i].num_embeddings));
+			total_embeddings += data_index.clusters[i].num_embeddings;
+			max_cluster_size = std::max(max_cluster_size, static_cast<size_t>(data_index.clusters[i].num_embeddings));
 		}
 	}
 
