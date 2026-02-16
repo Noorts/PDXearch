@@ -23,6 +23,12 @@ public:
 	static constexpr PDX::Quantization DEFAULT_QUANTIZATION = PDX::Quantization::F32;
 	static constexpr int32_t DEFAULT_N_PROBE = 128;
 
+	// We aim for 1:256 ratio of clusters to embeddings
+	// As a DuckDB rowgroup size is 122880, we set 480 clusters per row group
+	// While some rowgroups might be smaller, 480 is still a good number, even
+	// if the rowgroup falls down to 40k embeddings
+	static constexpr size_t DEFAULT_N_CLUSTERS_PER_ROW_GROUP = 480;
+
 private:
 	const uint32_t num_dimensions;
 	// Whether the embeddings (both the query embeddings and those stored in the
@@ -133,8 +139,7 @@ public:
 		D_ASSERT(estimated_num_row_groups > 0);
 		row_groups.resize(estimated_num_row_groups);
 
-		num_clusters_per_row_group = std::max<uint32_t>(
-		    1, static_cast<uint32_t>(ComputeNumberOfClusters(estimated_cardinality) / estimated_num_row_groups));
+		num_clusters_per_row_group = DEFAULT_N_CLUSTERS_PER_ROW_GROUP;
 	}
 
 	// Initialize the wrapper's state for this row group. This is called once per row group.
@@ -153,6 +158,9 @@ public:
 		row_group.pruner = make_uniq<PDX::ADSamplingPruner<PDX::F32>>(num_dimensions, rotation_matrix.get());
 
 		// Compute K-means centroids and embedding-to-centroid assignment.
+		// TODO(@lkuffo): What would happen if num_embeddings < num_clusters_per_row_group?
+		//     If this happens, I would like to set num_clusters_per_row_group to 1, 
+		// 	   but I'm not sure if this will break something else
 		KMeansResult kmeans_result =
 		    ComputeKMeans(embeddings, num_embeddings, num_dimensions, num_clusters_per_row_group, GetDistanceMetric());
 
