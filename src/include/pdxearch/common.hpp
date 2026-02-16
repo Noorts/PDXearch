@@ -15,7 +15,7 @@ static constexpr uint32_t DIMENSIONS_FETCHING_SIZES[20] = {16,  16,  32,  32,  3
                                                            128, 128, 128, 128, 256, 256, 512, 1024, 2048, 65536};
 
 // Epsilon0 parameter of ADSampling (Reference: https://dl.acm.org/doi/abs/10.1145/3589282)
-static constexpr float ADSAMPLING_PRUNING_AGGRESIVENESS = 1.5f; 
+static constexpr float ADSAMPLING_PRUNING_AGGRESIVENESS = 1.5f;
 
 template <class T, T val = 8>
 static constexpr uint32_t AlignValue(T n) {

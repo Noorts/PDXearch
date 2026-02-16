@@ -159,7 +159,7 @@ public:
 
 		// Compute K-means centroids and embedding-to-centroid assignment.
 		// TODO(@lkuffo): What would happen if num_embeddings < num_clusters_per_row_group?
-		//     If this happens, I would like to set num_clusters_per_row_group to 1, 
+		//     If this happens, I would like to set num_clusters_per_row_group to 1,
 		// 	   but I'm not sure if this will break something else
 		KMeansResult kmeans_result =
 		    ComputeKMeans(embeddings, num_embeddings, num_dimensions, num_clusters_per_row_group, GetDistanceMetric());

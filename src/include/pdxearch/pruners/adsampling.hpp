@@ -36,8 +36,7 @@ class ADSamplingPruner {
 public:
 	const uint32_t num_dimensions;
 
-	ADSamplingPruner(const uint32_t num_dimensions, const float *matrix_p)
-	    : num_dimensions(num_dimensions){
+	ADSamplingPruner(const uint32_t num_dimensions, const float *matrix_p) : num_dimensions(num_dimensions) {
 		ratios.resize(num_dimensions);
 		for (size_t i = 0; i < num_dimensions; ++i) {
 			ratios[i] = GetRatio(i);
@@ -100,7 +99,8 @@ private:
 			return 1.0;
 		}
 		return static_cast<float>(visited_dimensions) / num_dimensions *
-		       (1.0 + pruning_aggressiveness / std::sqrt(visited_dimensions)) * (1.0 + pruning_aggressiveness / std::sqrt(visited_dimensions));
+		       (1.0 + pruning_aggressiveness / std::sqrt(visited_dimensions)) *
+		       (1.0 + pruning_aggressiveness / std::sqrt(visited_dimensions));
 	}
 
 	/**
