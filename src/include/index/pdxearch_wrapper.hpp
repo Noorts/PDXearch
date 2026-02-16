@@ -23,10 +23,10 @@ public:
 	static constexpr PDX::Quantization DEFAULT_QUANTIZATION = PDX::Quantization::F32;
 	static constexpr int32_t DEFAULT_N_PROBE = 128;
 
-	// We aim for 1:256 ratio of clusters to embeddings
-	// As a DuckDB rowgroup size is 122880, we set 480 clusters per row group
-	// While some rowgroups might be smaller, 480 is still a good number, even
-	// if the rowgroup falls down to 40k embeddings
+	// We aim for a 1:256 ratio of clusters to embeddings. As a DuckDB rowgroup
+	// size is usually 122880, we set 480 clusters per row group. While some
+	// row groups might be smaller, 480 is still a good number, even if the
+	// row group falls down to 40k embeddings.
 	static constexpr size_t DEFAULT_N_CLUSTERS_PER_ROW_GROUP = 480;
 
 private:
