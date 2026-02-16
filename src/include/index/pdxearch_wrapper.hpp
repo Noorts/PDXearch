@@ -23,12 +23,6 @@ public:
 	static constexpr PDX::Quantization DEFAULT_QUANTIZATION = PDX::Quantization::F32;
 	static constexpr int32_t DEFAULT_N_PROBE = 128;
 
-	// We aim for a 1:256 ratio of clusters to embeddings. As a DuckDB rowgroup
-	// size is usually 122880, we set 480 clusters per row group. While some
-	// row groups might be smaller, 480 is still a good number, even if the
-	// row group falls down to 40k embeddings.
-	static constexpr size_t DEFAULT_N_CLUSTERS_PER_ROW_GROUP = 480;
-
 private:
 	const uint32_t num_dimensions;
 	// Whether the embeddings (both the query embeddings and those stored in the
@@ -118,6 +112,13 @@ public:
 // group. This allows the creation of the index and searching in it to be parallelized at the row group level. This
 // wrapper only supports float32 quantization.
 class PDXearchWrapperF32 : public PDXearchWrapper {
+public:
+	// We aim for a 1:256 ratio of clusters to embeddings. As a DuckDB rowgroup
+	// size is usually 122880, we set 480 clusters per row group. While some
+	// row groups might be smaller, 480 is still a good number, even if the
+	// row group falls down to 40k embeddings.
+	static constexpr size_t DEFAULT_N_CLUSTERS_PER_ROW_GROUP = 480;
+
 private:
 	uint32_t num_clusters_per_row_group {};
 	std::vector<PDXRowGroup> row_groups;
