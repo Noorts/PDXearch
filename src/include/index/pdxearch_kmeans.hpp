@@ -3,7 +3,7 @@
 #include "duckdb/common/assert.hpp"
 #include <vector>
 #include "pdxearch/common.hpp"
-#include "superkmeans/superkmeans.h"
+#include "superkmeans/hierarchical_superkmeans.h"
 
 namespace duckdb {
 
@@ -35,16 +35,17 @@ struct KMeansResult {
 	auto result = KMeansResult(num_clusters);
 
 	// Compute centroids
-	skmeans::SuperKMeansConfig config;
+	skmeans::HierarchicalSuperKMeansConfig config;
 	config.sampling_fraction = 0.3f;
 	config.angular = distance_metric == PDX::DistanceMetric::COSINE || distance_metric == PDX::DistanceMetric::IP;
 	config.data_already_rotated = true;
-	config.iters = 8;
-	// TODO(@lkuffo): If per rowgroup, we should send n_threads = 1, 
-	// otherwise, we should not set it
-	config.n_threads = 1;
+	config.iters_mesoclustering = 3;
+	config.iters_fineclustering = 2;
+	config.iters_refinement = 1;
 	config.seed = 1234;
-	auto kmeans = skmeans::SuperKMeans(num_clusters, num_dimensions, config);
+	// TODO(@lkuffo): If per rowgroup, we should send n_threads = 1, otherwise, we should not set it
+	config.n_threads = 1;
+	auto kmeans = skmeans::HierarchicalSuperKMeans(num_clusters, num_dimensions, config);
 	result.centroids = kmeans.Train(embeddings, num_embeddings);
 
 	// Extract assignments
@@ -56,7 +57,6 @@ struct KMeansResult {
 	for (uint64_t vec_id = 0; vec_id < num_embeddings; vec_id++) {
 		result.assignments[assignments[vec_id]].emplace_back(vec_id);
 	}
-
 	return result;
 };
 
