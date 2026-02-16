@@ -29,7 +29,7 @@ public:
 
 		// Preprocess the query embedding.
 		const EmbeddingPreprocessor embedding_preprocessor =
-		    EmbeddingPreprocessor(index.GetNumDimensions(), index.GetRotationMatrix(), PDXearchWrapper::EPSILON0);
+		    EmbeddingPreprocessor(index.GetNumDimensions(), index.GetRotationMatrix());
 		embedding_preprocessor.PreprocessEmbedding(bind_data.query_embedding.get(), preprocessed_query_embedding.get(),
 		                                           index.IsNormalized());
 

@@ -31,8 +31,7 @@ public:
 	      preprocessed_query_embedding(make_uniq_array<float>(index.GetNumDimensions())), pdxearch_row_ids(nullptr) {
 
 		// Preprocess the query embedding.
-		EmbeddingPreprocessor embedding_preprocessor(index.GetNumDimensions(), index.GetRotationMatrix(),
-		                                             PDXearchWrapper::EPSILON0);
+		EmbeddingPreprocessor embedding_preprocessor(index.GetNumDimensions(), index.GetRotationMatrix());
 		embedding_preprocessor.PreprocessEmbedding(bind_data.query_embedding.get(), preprocessed_query_embedding.get(),
 		                                           index.IsNormalized());
 
@@ -260,7 +259,6 @@ SinkFinalizeType PhysicalPDXearchIndexFilteredScan::Finalize(Pipeline &pipeline,
 // iteration, which will probe the next X clusters for each row group.
 void PhysicalFilteredScanGlobalSinkState::TryFinalizeSinkPhase(Pipeline &pipeline, Event &event) {
 	D_ASSERT(global_heap->size() <= limit);
-	D_ASSERT(partitions_per_row_group_probed_thus_far <= index.GetNumClustersPerRowGroup());
 
 	// The heap (and thus pruning threshold) is initialized with a max float element. This float element should not be
 	// part of the result (it is not valid). There is an edge case where this element is the Kth item (at the top of the

@@ -19,7 +19,6 @@ namespace duckdb {
 
 class PDXearchWrapper {
 public:
-	static constexpr float EPSILON0 = 1.5;
 	static constexpr PDX::DistanceMetric DEFAULT_DISTANCE_METRIC = PDX::DistanceMetric::L2SQ;
 	static constexpr PDX::Quantization DEFAULT_QUANTIZATION = PDX::Quantization::F32;
 	static constexpr int32_t DEFAULT_N_PROBE = 128;
@@ -113,6 +112,13 @@ public:
 // group. This allows the creation of the index and searching in it to be parallelized at the row group level. This
 // wrapper only supports float32 quantization.
 class PDXearchWrapperF32 : public PDXearchWrapper {
+public:
+	// We aim for a 1:256 ratio of clusters to embeddings. As a DuckDB rowgroup
+	// size is usually 122880, we set 480 clusters per row group. While some
+	// row groups might be smaller, 480 is still a good number, even if the
+	// row group falls down to 40k embeddings.
+	static constexpr size_t DEFAULT_N_CLUSTERS_PER_ROW_GROUP = 480;
+
 private:
 	uint32_t num_clusters_per_row_group {};
 	std::vector<PDXRowGroup> row_groups;
@@ -134,8 +140,7 @@ public:
 		D_ASSERT(estimated_num_row_groups > 0);
 		row_groups.resize(estimated_num_row_groups);
 
-		num_clusters_per_row_group = std::max<uint32_t>(
-		    1, static_cast<uint32_t>(ComputeNumberOfClusters(estimated_cardinality) / estimated_num_row_groups));
+		num_clusters_per_row_group = DEFAULT_N_CLUSTERS_PER_ROW_GROUP;
 	}
 
 	// Initialize the wrapper's state for this row group. This is called once per row group.
@@ -148,10 +153,12 @@ public:
 		D_ASSERT(num_dimensions > 0);
 		D_ASSERT(num_embeddings > 0);
 		D_ASSERT(num_clusters_per_row_group > 0);
+		// TODO(@lkuffo): See issue #38. num_embeddings < DEFAULT_N_CLUSTERS_PER_ROW_GROUP is currently not handled.
+		D_ASSERT(num_embeddings >= num_clusters_per_row_group);
 
 		row_group.index = make_uniq<PDX::IndexPDXIVF<PDX::F32>>(num_dimensions, num_embeddings,
 		                                                        num_clusters_per_row_group, IsNormalized());
-		row_group.pruner = make_uniq<PDX::ADSamplingPruner<PDX::F32>>(num_dimensions, EPSILON0, rotation_matrix.get());
+		row_group.pruner = make_uniq<PDX::ADSamplingPruner<PDX::F32>>(num_dimensions, rotation_matrix.get());
 
 		// Compute K-means centroids and embedding-to-centroid assignment.
 		KMeansResult kmeans_result =
@@ -267,7 +274,7 @@ public:
 	      row_id_cluster_mapping(estimated_cardinality),
 	      index(make_uniq<PDX::IndexPDXIVF<PDX::F32>>(num_dimensions, estimated_cardinality, num_clusters,
 	                                                  IsNormalized())),
-	      pruner(make_uniq<PDX::ADSamplingPruner<PDX::F32>>(num_dimensions, EPSILON0, rotation_matrix.get())) {
+	      pruner(make_uniq<PDX::ADSamplingPruner<PDX::F32>>(num_dimensions, rotation_matrix.get())) {
 		// Additional constraints on the number of dimensions are enforced in `pdxearch_index_plan.cpp`.
 		D_ASSERT(num_dimensions > 0);
 		D_ASSERT(estimated_cardinality > 0);

@@ -33,7 +33,7 @@ public:
 	                                            op.estimated_cardinality)),
 	      num_dimensions(ArrayType::GetSize(op.unbound_expressions[0]->return_type)),
 	      embedding_preprocessor(make_uniq<EmbeddingPreprocessor>(
-	          num_dimensions, global_index->Cast<PDXearchIndex>().GetRotationMatrix(), PDXearchWrapper::EPSILON0)),
+	          num_dimensions, global_index->Cast<PDXearchIndex>().GetRotationMatrix())),
 	      is_normalized(global_index->Cast<PDXearchIndex>().IsNormalized()) {
 	}
 
