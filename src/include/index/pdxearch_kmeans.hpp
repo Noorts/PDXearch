@@ -27,7 +27,7 @@ struct KMeansResult {
 // Compute centroids (clusters) and centroid-to-embedding assignments using SuperKMeans.
 [[nodiscard]] inline KMeansResult ComputeKMeans(const float *const embeddings, const uint64_t num_embeddings,
                                                 const uint32_t num_dimensions, const uint32_t num_clusters,
-                                                const PDX::DistanceMetric distance_metric) {
+                                                const PDX::DistanceMetric distance_metric, const uint32_t seed) {
 	D_ASSERT(num_embeddings >= 1);
 	D_ASSERT(num_dimensions >= 1);
 	D_ASSERT(num_clusters >= 1);
@@ -40,11 +40,13 @@ struct KMeansResult {
 	config.angular = distance_metric == PDX::DistanceMetric::COSINE || distance_metric == PDX::DistanceMetric::IP;
 	config.data_already_rotated = true;
 	config.iters_mesoclustering = 3;
-	config.iters_fineclustering = 2;
+	config.iters_fineclustering = 5;
 	config.iters_refinement = 1;
-	config.seed = 1234;
+	config.seed = seed;
+
 	// TODO(@lkuffo): If per rowgroup, we should send n_threads = 1, otherwise, we should not set it
-	config.n_threads = 1;
+	// config.n_threads = 1;
+
 	auto kmeans = skmeans::HierarchicalSuperKMeans(num_clusters, num_dimensions, config);
 	result.centroids = kmeans.Train(embeddings, num_embeddings);
 

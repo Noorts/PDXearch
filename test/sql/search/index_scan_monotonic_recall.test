@@ -58,9 +58,9 @@ CREATE OR REPLACE TABLE t_idx_res AS SELECT * FROM t1 ORDER BY ${distance_func}(
 # value paired with a low LIMIT can result in less than LIMIT rows being
 # returned.
 query I
-SELECT COUNT(*) FROM t_idx_res;
+SELECT COUNT(*) > 0 AND COUNT(*) <= ${LIMIT} FROM t_idx_res;
 ----
-${LIMIT}
+true
 
 # Compute recall for this n_probe.
 statement ok

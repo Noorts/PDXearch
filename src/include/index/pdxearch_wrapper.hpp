@@ -161,8 +161,8 @@ public:
 		row_group.pruner = make_uniq<PDX::ADSamplingPruner<PDX::F32>>(num_dimensions, rotation_matrix.get());
 
 		// Compute K-means centroids and embedding-to-centroid assignment.
-		KMeansResult kmeans_result =
-		    ComputeKMeans(embeddings, num_embeddings, num_dimensions, num_clusters_per_row_group, GetDistanceMetric());
+		KMeansResult kmeans_result = ComputeKMeans(embeddings, num_embeddings, num_dimensions,
+		                                           num_clusters_per_row_group, GetDistanceMetric(), GetSeed());
 
 		// Store centroids.
 		row_group.index->centroids = std::move(kmeans_result.centroids);
@@ -286,8 +286,8 @@ public:
 		D_ASSERT(num_embeddings == total_num_embeddings);
 
 		// Compute K-means centroids and embedding-to-centroid assignment.
-		KMeansResult kmeans_result =
-		    ComputeKMeans(embeddings, num_embeddings, index->num_dimensions, num_clusters, GetDistanceMetric());
+		KMeansResult kmeans_result = ComputeKMeans(embeddings, num_embeddings, index->num_dimensions, num_clusters,
+		                                           GetDistanceMetric(), GetSeed());
 
 		// Store centroids.
 		index->centroids = std::move(kmeans_result.centroids);
