@@ -152,15 +152,14 @@ public:
 		D_ASSERT(num_dimensions > 0);
 		D_ASSERT(num_embeddings > 0);
 		D_ASSERT(num_clusters_per_row_group > 0);
+		// TODO(@lkuffo): See issue #38. num_embeddings < DEFAULT_N_CLUSTERS_PER_ROW_GROUP is currently not handled.
+		D_ASSERT(num_embeddings >= num_clusters_per_row_group);
 
 		row_group.index = make_uniq<PDX::IndexPDXIVF<PDX::F32>>(num_dimensions, num_embeddings,
 		                                                        num_clusters_per_row_group, IsNormalized());
 		row_group.pruner = make_uniq<PDX::ADSamplingPruner<PDX::F32>>(num_dimensions, rotation_matrix.get());
 
 		// Compute K-means centroids and embedding-to-centroid assignment.
-		// TODO(@lkuffo): What would happen if num_embeddings < num_clusters_per_row_group?
-		//     If this happens, I would like to set num_clusters_per_row_group to 1,
-		// 	   but I'm not sure if this will break something else
 		KMeansResult kmeans_result =
 		    ComputeKMeans(embeddings, num_embeddings, num_dimensions, num_clusters_per_row_group, GetDistanceMetric());
 
