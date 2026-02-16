@@ -39,6 +39,14 @@ struct KMeansResult {
 	config.sampling_fraction = 0.3f;
 	config.angular = distance_metric == PDX::DistanceMetric::COSINE || distance_metric == PDX::DistanceMetric::IP;
 	config.data_already_rotated = true;
+	config.iters = 8;
+	config.verbose = true;
+	// TODO(@lkuffo): If per rowgroup, we should send n_threads = 1, 
+	// otherwise, we should not set it
+	config.n_threads = 1;
+	std::cout << "Running SuperKMeans with num_clusters: " << num_clusters << " and num_dimensions: " << num_dimensions << std::endl;
+	std::cout << "Sampling fraction: " << config.sampling_fraction << std::endl;
+	std::cout << "Num embeddings: " << num_embeddings << std::endl;
 	auto kmeans = skmeans::SuperKMeans(num_clusters, num_dimensions, config);
 	result.centroids = kmeans.Train(embeddings, num_embeddings);
 
