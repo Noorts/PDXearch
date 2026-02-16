@@ -59,6 +59,7 @@ struct KMeansResult {
 	for (uint64_t vec_id = 0; vec_id < num_embeddings; vec_id++) {
 		result.assignments[assignments[vec_id]].emplace_back(vec_id);
 	}
+
 	return result;
 };
 
