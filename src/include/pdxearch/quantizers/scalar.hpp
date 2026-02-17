@@ -62,7 +62,7 @@ public:
 			global_max = std::max(global_max, embeddings[i]);
 		}
 		float range = global_max - global_min;
-		return {global_min, (range > 0) ? 255.0f / range : 1.0f};
+		return {global_min, (range > 0) ? static_cast<float>(MAX_VALUE) / range : 1.0f};
 	}
 
 	void QuantizeVector(const float *input, const float quantization_base, const float quantization_scale,
