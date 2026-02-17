@@ -97,29 +97,12 @@ private:
 	            const size_t n) const {
 		const char trans_a = 'T';
 		const char trans_b = 'N';
-		int m = static_cast<int>(num_dimensions);
+		const float alpha = 1.0f;
+		const float beta = 0.0f;
+		int dim = static_cast<int>(num_dimensions);
 		int n_blas = static_cast<int>(n);
-		int k = static_cast<int>(num_dimensions);
-		float alpha = 1.0f;
-		float beta = 0.0f;
-		int lda = static_cast<int>(num_dimensions);
-		int ldb = static_cast<int>(num_dimensions);
-		int ldc = static_cast<int>(num_dimensions);
-		sgemm_(
-			&trans_a,
-			&trans_b,
-			&m,
-			&n_blas,
-			&k,
-			&alpha,
-			matrix.data(),
-			&lda,
-			embeddings,
-			&ldb,
-			&beta,
-			out_buffer,
-			&ldc
-		);
+		sgemm_(&trans_a, &trans_b, &dim, &n_blas, &dim, &alpha, matrix.data(), &dim, embeddings, &dim, &beta,
+		        out_buffer, &dim);
 	}
 };
 
