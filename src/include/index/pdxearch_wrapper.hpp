@@ -20,7 +20,7 @@ namespace duckdb {
 class PDXearchWrapper {
 public:
 	static constexpr PDX::DistanceMetric DEFAULT_DISTANCE_METRIC = PDX::DistanceMetric::L2SQ;
-	static constexpr PDX::Quantization DEFAULT_QUANTIZATION = PDX::Quantization::F32;
+	static constexpr PDX::Quantization DEFAULT_QUANTIZATION = PDX::Quantization::U8;
 	static constexpr int32_t DEFAULT_N_PROBE = 128;
 
 private:
@@ -97,21 +97,22 @@ struct RowIdClusterMapping {
 };
 
 // All state required for storing a row group's embeddings and searching them.
+template <PDX::Quantization Q>
 class PDXRowGroup {
 public:
 	// Row group embedding storage and metadata.
-	std::unique_ptr<PDX::IndexPDXIVF<PDX::F32>> index;
+	std::unique_ptr<PDX::IndexPDXIVF<Q>> index;
 	std::vector<RowIdClusterMapping> row_id_metadata {DEFAULT_ROW_GROUP_SIZE};
 
-	std::unique_ptr<PDX::ADSamplingPruner<PDX::F32>> pruner;
+	std::unique_ptr<PDX::ADSamplingPruner<Q>> pruner;
 	// The searcher is reinitialized and reused across DuckDB queries.
-	std::unique_ptr<PDX::PDXearch<PDX::F32>> searcher;
+	std::unique_ptr<PDX::PDXearch<Q>> searcher;
 };
 
 // The PDXearchWrapper for the parallel implementation. The parallel implementation uses a separate index for each row
-// group. This allows the creation of the index and searching in it to be parallelized at the row group level. This
-// wrapper only supports float32 quantization.
-class PDXearchWrapperF32 : public PDXearchWrapper {
+// group. This allows the creation of the index and searching in it to be parallelized at the row group level.
+template <PDX::Quantization Q>
+class PDXearchWrapperParallel : public PDXearchWrapper {
 public:
 	// We aim for a 1:256 ratio of clusters to embeddings. As a DuckDB rowgroup
 	// size is usually 122880, we set 480 clusters per row group. While some
@@ -121,12 +122,12 @@ public:
 
 private:
 	uint32_t num_clusters_per_row_group {};
-	std::vector<PDXRowGroup> row_groups;
+	std::vector<PDXRowGroup<Q>> row_groups;
 
 public:
-	PDXearchWrapperF32(PDX::DistanceMetric distance_metric, uint32_t num_dimensions, uint32_t n_probe, int32_t seed,
-	                   idx_t estimated_cardinality)
-	    : PDXearchWrapper(PDX::Quantization::F32, distance_metric, num_dimensions, n_probe, seed) {
+	PDXearchWrapperParallel(PDX::DistanceMetric distance_metric, uint32_t num_dimensions, uint32_t n_probe,
+	                        int32_t seed, idx_t estimated_cardinality)
+	    : PDXearchWrapper(Q, distance_metric, num_dimensions, n_probe, seed) {
 		if (estimated_cardinality == 0) {
 			throw InternalException(
 			    "Something went wrong: estimated_cardinality is 0. This is likely because a malformed persisted index "
@@ -146,7 +147,7 @@ public:
 	// Initialize the wrapper's state for this row group. This is called once per row group.
 	void SetUpIndexForRowGroup(const row_t *const row_ids, const float *const embeddings, const idx_t num_embeddings,
 	                           const idx_t row_group_id) {
-		PDXRowGroup &row_group = row_groups[row_group_id];
+		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
 
 		const auto num_dimensions = GetNumDimensions();
 		// Additional constraints on the number of dimensions are enforced in `pdxearch_index_plan.cpp`.
@@ -156,11 +157,22 @@ public:
 		// TODO(@lkuffo): See issue #38. num_embeddings < DEFAULT_N_CLUSTERS_PER_ROW_GROUP is currently not handled.
 		D_ASSERT(num_embeddings >= num_clusters_per_row_group);
 
-		row_group.index = make_uniq<PDX::IndexPDXIVF<PDX::F32>>(num_dimensions, num_embeddings,
-		                                                        num_clusters_per_row_group, IsNormalized());
-		row_group.pruner = make_uniq<PDX::ADSamplingPruner<PDX::F32>>(num_dimensions, rotation_matrix.get());
+		float quantization_base = 0.0f;
+		float quantization_scale = 1.0f;
+		if constexpr (Q == PDX::U8) {
+			const auto params = PDX::ScalarQuantizer<Q>::ComputeQuantizationParams(
+			    embeddings, static_cast<size_t>(num_embeddings) * num_dimensions);
+			quantization_base = params.quantization_base;
+			quantization_scale = params.quantization_scale;
+			row_group.index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters_per_row_group,
+			                                                 IsNormalized(), quantization_scale, quantization_base);
+		} else {
+			row_group.index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters_per_row_group,
+			                                                 IsNormalized());
+		}
+		row_group.pruner = make_uniq<PDX::ADSamplingPruner<Q>>(num_dimensions, rotation_matrix.get());
 
-		// Compute K-means centroids and embedding-to-centroid assignment.
+		// Compute K-means centroids and embedding-to-centroid assignment (always on float embeddings).
 		KMeansResult kmeans_result = ComputeKMeans(embeddings, num_embeddings, num_dimensions,
 		                                           num_clusters_per_row_group, GetDistanceMetric(), GetSeed());
 
@@ -169,19 +181,19 @@ public:
 
 		// Row-major buffer that the current cluster's embeddings are "gathered" into. This buffer is the source for
 		// StoreClusterEmbeddings, the result of which is persistently stored in the index. The buffer is reused across
-		// clusters.
+		// clusters. For F32: buffer is float. For U8: buffer is uint8_t (quantized).
+		using EmbeddingStorageType = PDX::DataType_t<Q>;
 		size_t max_cluster_size = 0;
 		for (size_t i = 0; i < num_clusters_per_row_group; i++) {
 			max_cluster_size = std::max(max_cluster_size, kmeans_result.assignments[i].size());
 		}
-		std::unique_ptr<float[]> tmp_cluster_embeddings =
-		    std::make_unique<float[]>(static_cast<uint64_t>(max_cluster_size * num_dimensions));
+		auto tmp_cluster_embeddings =
+		    std::make_unique<EmbeddingStorageType[]>(static_cast<uint64_t>(max_cluster_size * num_dimensions));
 
 		// Set up the IVF clusters' metadata and store the embeddings.
 		for (size_t cluster_idx = 0; cluster_idx < num_clusters_per_row_group; cluster_idx++) {
 			const auto cluster_size = kmeans_result.assignments[cluster_idx].size();
-			PDX::IndexPDXIVF<PDX::F32>::CLUSTER_TYPE &cluster =
-			    row_group.index->clusters.emplace_back(cluster_size, num_dimensions);
+			auto &cluster = row_group.index->clusters.emplace_back(cluster_size, num_dimensions);
 
 			for (size_t position_in_cluster = 0; position_in_cluster < cluster_size; position_in_cluster++) {
 				const auto embedding_idx = kmeans_result.assignments[cluster_idx][position_in_cluster];
@@ -191,33 +203,40 @@ public:
 				    static_cast<uint32_t>(cluster_idx), static_cast<uint32_t>(position_in_cluster)};
 				cluster.indices[position_in_cluster] = row_id;
 
-				memcpy(tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions),
-				       embeddings + (embedding_idx * num_dimensions), num_dimensions * sizeof(float));
+				if constexpr (Q == PDX::U8) {
+					PDX::ScalarQuantizer<Q> quantizer(num_dimensions);
+					quantizer.QuantizeEmbedding(embeddings + (embedding_idx * num_dimensions), quantization_base,
+					                            quantization_scale,
+					                            tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions));
+				} else {
+					memcpy(tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions),
+					       embeddings + (embedding_idx * num_dimensions), num_dimensions * sizeof(float));
+				}
 			}
 
-			StoreClusterEmbeddings<PDX::F32, float>(cluster, *row_group.index, tmp_cluster_embeddings.get(),
-			                                        cluster_size);
+			StoreClusterEmbeddings<Q, EmbeddingStorageType>(cluster, *row_group.index, tmp_cluster_embeddings.get(),
+			                                                cluster_size);
 		}
 
 		// Note: the searcher depends on a fully initialized index in its constructor.
-		row_group.searcher = make_uniq<PDX::PDXearch<PDX::F32>>(*row_group.index, *row_group.pruner);
+		row_group.searcher = make_uniq<PDX::PDXearch<Q>>(*row_group.index, *row_group.pruner);
 	}
 
 	void InitializeSearchForRowGroup(float *const preprocessed_query_embedding, const idx_t limit,
-	                                 const idx_t row_group_id, PDX::Heap<PDX::F32> &heap, std::mutex &heap_mutex) {
-		PDXRowGroup &row_group = row_groups[row_group_id];
+	                                 const idx_t row_group_id, PDX::Heap &heap, std::mutex &heap_mutex) {
+		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
 		row_group.searcher->InitializeSearch(preprocessed_query_embedding, limit, heap, heap_mutex);
 	}
 
 	void SearchRowGroup(const idx_t row_group_id, const idx_t num_clusters_to_probe) {
-		PDXRowGroup &row_group = row_groups[row_group_id];
+		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
 		row_group.searcher->Search(num_clusters_to_probe);
 	}
 
 	void InitializeFilteredSearchForRowGroup(float *const preprocessed_query_embedding, const idx_t limit,
 	                                         const std::vector<row_t> &passing_row_ids, const idx_t row_group_id,
-	                                         PDX::Heap<PDX::F32> &heap, std::mutex &heap_mutex) {
-		PDXRowGroup &row_group = row_groups[row_group_id];
+	                                         PDX::Heap &heap, std::mutex &heap_mutex) {
+		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
 
 		std::unique_ptr<PDX::PredicateEvaluator> predicate_evaluator =
 		    make_uniq<PDX::PredicateEvaluator>(CreatePredicateEvaluatorForRowGroup(passing_row_ids, row_group));
@@ -227,12 +246,12 @@ public:
 	}
 
 	void FilteredSearchRowGroup(const idx_t row_group_id, const idx_t num_clusters_to_probe) {
-		PDXRowGroup &row_group = row_groups[row_group_id];
+		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
 		row_group.searcher->FilteredSearch(num_clusters_to_probe);
 	}
 
 	static PDX::PredicateEvaluator CreatePredicateEvaluatorForRowGroup(const std::vector<row_t> &passing_row_ids,
-	                                                                   const PDXRowGroup &row_group) {
+	                                                                   const PDXRowGroup<Q> &row_group) {
 		PDX::PredicateEvaluator predicate_evaluator(row_group.index->num_clusters,
 		                                            row_group.index->total_num_embeddings);
 
@@ -254,27 +273,29 @@ public:
 	}
 };
 
+using PDXearchWrapperF32 = PDXearchWrapperParallel<PDX::F32>;
+using PDXearchWrapperU8 = PDXearchWrapperParallel<PDX::U8>;
+
 // The PDXearchWrapper for the global implementation. The global implementation uses a single PDX index to represent and
-// search all embeddings in the DuckDB table. This wrapper only supports float32 quantization.
-class PDXearchWrapperGlobalF32 : public PDXearchWrapper {
+// search all embeddings in the DuckDB table.
+template <PDX::Quantization Q>
+class PDXearchWrapperGlobal : public PDXearchWrapper {
 private:
 	uint32_t num_clusters {};
 	uint64_t total_num_embeddings {};
 	std::vector<RowIdClusterMapping> row_id_cluster_mapping;
 
-	std::unique_ptr<PDX::IndexPDXIVF<PDX::F32>> index;
-	std::unique_ptr<PDX::ADSamplingPruner<PDX::F32>> pruner;
-	std::unique_ptr<PDX::PDXearch<PDX::F32>> searcher;
+	std::unique_ptr<PDX::IndexPDXIVF<Q>> index;
+	std::unique_ptr<PDX::ADSamplingPruner<Q>> pruner;
+	std::unique_ptr<PDX::PDXearch<Q>> searcher;
 
 public:
-	PDXearchWrapperGlobalF32(PDX::DistanceMetric distance_metric, uint32_t num_dimensions, uint32_t n_probe,
-	                         int32_t seed, idx_t estimated_cardinality)
-	    : PDXearchWrapper(PDX::Quantization::F32, distance_metric, num_dimensions, n_probe, seed),
+	PDXearchWrapperGlobal(PDX::DistanceMetric distance_metric, uint32_t num_dimensions, uint32_t n_probe, int32_t seed,
+	                      idx_t estimated_cardinality)
+	    : PDXearchWrapper(Q, distance_metric, num_dimensions, n_probe, seed),
 	      num_clusters(ComputeNumberOfClusters(estimated_cardinality)), total_num_embeddings(estimated_cardinality),
 	      row_id_cluster_mapping(estimated_cardinality),
-	      index(make_uniq<PDX::IndexPDXIVF<PDX::F32>>(num_dimensions, estimated_cardinality, num_clusters,
-	                                                  IsNormalized())),
-	      pruner(make_uniq<PDX::ADSamplingPruner<PDX::F32>>(num_dimensions, rotation_matrix.get())) {
+	      pruner(make_uniq<PDX::ADSamplingPruner<Q>>(num_dimensions, rotation_matrix.get())) {
 		// Additional constraints on the number of dimensions are enforced in `pdxearch_index_plan.cpp`.
 		D_ASSERT(num_dimensions > 0);
 		D_ASSERT(estimated_cardinality > 0);
@@ -285,28 +306,43 @@ public:
 	void SetUpGlobalIndex(const row_t *const row_ids, const float *const embeddings, const idx_t num_embeddings) {
 		D_ASSERT(num_embeddings == total_num_embeddings);
 
-		// Compute K-means centroids and embedding-to-centroid assignment.
-		KMeansResult kmeans_result = ComputeKMeans(embeddings, num_embeddings, index->num_dimensions, num_clusters,
-		                                           GetDistanceMetric(), GetSeed());
+		const auto num_dimensions = GetNumDimensions();
+
+		float quantization_base = 0.0f;
+		float quantization_scale = 1.0f;
+		if constexpr (Q == PDX::U8) {
+			const auto params = PDX::ScalarQuantizer<Q>::ComputeQuantizationParams(
+			    embeddings, static_cast<size_t>(num_embeddings) * num_dimensions);
+			quantization_base = params.quantization_base;
+			quantization_scale = params.quantization_scale;
+			index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters, IsNormalized(),
+			                                       quantization_scale, quantization_base);
+		} else {
+			index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters, IsNormalized());
+		}
+
+		// Compute K-means centroids and embedding-to-centroid assignment (always on float embeddings).
+		KMeansResult kmeans_result =
+		    ComputeKMeans(embeddings, num_embeddings, num_dimensions, num_clusters, GetDistanceMetric(), GetSeed());
 
 		// Store centroids.
 		index->centroids = std::move(kmeans_result.centroids);
 
 		// Row-major buffer that the current cluster's embeddings are "gathered" into. This buffer is the source for
 		// StoreClusterEmbeddings, the result of which is persistently stored in the index. The buffer is reused across
-		// clusters.
+		// clusters. For F32: buffer is float. For U8: buffer is uint8_t (quantized).
+		using EmbeddingStorageType = PDX::DataType_t<Q>;
 		size_t max_cluster_size = 0;
 		for (size_t i = 0; i < num_clusters; i++) {
 			max_cluster_size = std::max(max_cluster_size, kmeans_result.assignments[i].size());
 		}
-		std::unique_ptr<float[]> tmp_cluster_embeddings =
-		    std::make_unique<float[]>(static_cast<uint64_t>(max_cluster_size * index->num_dimensions));
+		auto tmp_cluster_embeddings =
+		    std::make_unique<EmbeddingStorageType[]>(static_cast<uint64_t>(max_cluster_size * num_dimensions));
 
 		// Set up the IVF clusters' metadata and store the embeddings.
 		for (size_t cluster_idx = 0; cluster_idx < num_clusters; cluster_idx++) {
 			const auto cluster_size = kmeans_result.assignments[cluster_idx].size();
-			PDX::IndexPDXIVF<PDX::F32>::CLUSTER_TYPE &cluster =
-			    index->clusters.emplace_back(cluster_size, index->num_dimensions);
+			auto &cluster = index->clusters.emplace_back(cluster_size, num_dimensions);
 
 			for (size_t position_in_cluster = 0; position_in_cluster < cluster_size; position_in_cluster++) {
 				const auto embedding_idx = kmeans_result.assignments[cluster_idx][position_in_cluster];
@@ -317,21 +353,29 @@ public:
 				                                    static_cast<uint32_t>(position_in_cluster)};
 				cluster.indices[position_in_cluster] = row_id;
 
-				memcpy(tmp_cluster_embeddings.get() + (position_in_cluster * index->num_dimensions),
-				       embeddings + (embedding_idx * index->num_dimensions), index->num_dimensions * sizeof(float));
+				if constexpr (Q == PDX::U8) {
+					PDX::ScalarQuantizer<Q> quantizer(num_dimensions);
+					quantizer.QuantizeEmbedding(embeddings + (embedding_idx * num_dimensions), quantization_base,
+					                            quantization_scale,
+					                            tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions));
+				} else {
+					memcpy(tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions),
+					       embeddings + (embedding_idx * num_dimensions), num_dimensions * sizeof(float));
+				}
 			}
 
-			StoreClusterEmbeddings<PDX::F32, float>(cluster, *index, tmp_cluster_embeddings.get(), cluster_size);
+			StoreClusterEmbeddings<Q, EmbeddingStorageType>(cluster, *index, tmp_cluster_embeddings.get(),
+			                                                cluster_size);
 		}
 
 		// Note: the searcher depends on a fully initialized index in its constructor.
-		searcher = make_uniq<PDX::PDXearch<PDX::F32>>(*index, *pruner);
+		searcher = make_uniq<PDX::PDXearch<Q>>(*index, *pruner);
 	}
 
 	std::unique_ptr<std::vector<row_t>> Search(const float *const query_embedding, const idx_t limit,
 	                                           const uint32_t n_probe) const {
 		searcher->SetNProbe(n_probe);
-		const std::vector<PDX::KNNCandidate<PDX::F32>> results = searcher->SearchGlobal(query_embedding, limit);
+		const std::vector<PDX::KNNCandidate> results = searcher->SearchGlobal(query_embedding, limit);
 		std::unique_ptr<std::vector<row_t>> row_ids = make_uniq<std::vector<row_t>>(results.size());
 		for (size_t i = 0; i < results.size(); i++) {
 			(*row_ids)[i] = results[i].index;
@@ -367,7 +411,7 @@ public:
 		const PDX::PredicateEvaluator predicate_evaluator = CreatePredicateEvaluator(row_id_vectors);
 
 		searcher->SetNProbe(n_probe);
-		std::vector<PDX::KNNCandidate<PDX::F32>> results =
+		std::vector<PDX::KNNCandidate> results =
 		    searcher->FilteredSearchGlobal(query_embedding, limit, predicate_evaluator);
 		std::unique_ptr<std::vector<row_t>> row_ids = make_uniq<std::vector<row_t>>(results.size());
 		for (size_t i = 0; i < results.size(); i++) {
@@ -380,5 +424,8 @@ public:
 		return num_clusters;
 	}
 };
+
+using PDXearchWrapperGlobalF32 = PDXearchWrapperGlobal<PDX::F32>;
+using PDXearchWrapperGlobalU8 = PDXearchWrapperGlobal<PDX::U8>;
 
 } // namespace duckdb

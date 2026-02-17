@@ -41,4 +41,19 @@ public:
 	constexpr static auto Horizontal = computer::Horizontal;
 };
 
+template <>
+class DistanceComputer<DistanceMetric::L2SQ, Quantization::U8> {
+#if !defined(__ARM_NEON) && !defined(__AVX2__) && !defined(__AVX512F__)
+	using computer = ScalarComputer<DistanceMetric::L2SQ, U8>;
+#else
+	using computer = SIMDComputer<DistanceMetric::L2SQ, U8>;
+#endif
+
+public:
+	constexpr static auto VerticalPruning = computer::Vertical<true>;
+	constexpr static auto Vertical = computer::Vertical<false>;
+
+	constexpr static auto Horizontal = computer::Horizontal;
+};
+
 } // namespace PDX

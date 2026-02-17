@@ -5,6 +5,26 @@
 #include <cassert>
 #include <queue>
 
+#ifndef PDX_RESTRICT
+#if defined(__GNUC__) || defined(__clang__)
+#define PDX_RESTRICT __restrict__
+#elif defined(_MSC_VER)
+#define PDX_RESTRICT __restrict
+#elif defined(__INTEL_COMPILER)
+#define PDX_RESTRICT __restrict__
+#else
+#define PDX_RESTRICT
+#endif
+#endif
+
+#if defined(__GNUC__) || defined(__clang__)
+#define PDX_LIKELY(x)   __builtin_expect(!!(x), 1)
+#define PDX_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define PDX_LIKELY(x)   (x)
+#define PDX_UNLIKELY(x) (x)
+#endif
+
 namespace PDX {
 
 static constexpr float PROPORTION_HORIZONTAL_DIM = 0.75f;
@@ -13,6 +33,16 @@ static constexpr size_t PDX_MAX_DIMS = 65536;
 static constexpr size_t H_DIM_SIZE = 64;
 static constexpr uint32_t DIMENSIONS_FETCHING_SIZES[20] = {16,  16,  32,  32,  32,  32,  64,  64,   64,   64,
                                                            128, 128, 128, 128, 256, 256, 512, 1024, 2048, 65536};
+
+static constexpr bool AllFetchingSizesMultipleOf4() {
+	for (auto s : DIMENSIONS_FETCHING_SIZES) {
+		if (s % 4 != 0) {
+			return false;
+		}
+	}
+	return true;
+}
+static_assert(AllFetchingSizesMultipleOf4(), "All DIMENSIONS_FETCHING_SIZES must be multiples of 4");
 
 // Epsilon0 parameter of ADSampling (Reference: https://dl.acm.org/doi/abs/10.1145/3589282)
 static constexpr float ADSAMPLING_PRUNING_AGGRESIVENESS = 1.5f;
@@ -29,7 +59,7 @@ enum Quantization { F32, U8, F16, BF };
 // TODO: Do the same for indexes?
 template <Quantization q>
 struct DistanceType {
-	using type = uint32_t; // default for U8, U6, U4
+	using type = uint32_t;
 };
 template <>
 struct DistanceType<F32> {
@@ -41,7 +71,7 @@ using DistanceType_t = typename DistanceType<q>::type;
 // TODO: Do the same for indexes?
 template <Quantization q>
 struct DataType {
-	using type = uint8_t; // default for U8, U6, U4
+	using type = uint8_t; // U8
 };
 template <>
 struct DataType<F32> {
@@ -52,40 +82,33 @@ using DataType_t = typename DataType<q>::type;
 
 template <Quantization q>
 struct QuantizedVectorType {
-	using type = uint8_t; // default for U8, U6, U4
+	using type = uint8_t; // U8
 };
 template <>
 struct QuantizedVectorType<F32> {
 	using type = float;
 };
 template <Quantization q>
-using QuantizedVectorType_t = typename QuantizedVectorType<q>::type;
+using QuantizedEmbeddingType_t = typename QuantizedVectorType<q>::type;
 
-template <PDX::Quantization q>
 struct KNNCandidate {
 	uint32_t index;
 	float distance;
 };
 
-template <PDX::Quantization q>
 struct VectorComparator {
-	bool operator()(const KNNCandidate<q> &a, const KNNCandidate<q> &b) {
+	bool operator()(const KNNCandidate &a, const KNNCandidate &b) {
 		return a.distance < b.distance;
 	}
 };
 
 template <Quantization q>
-struct Cluster { // default for U8, U6, U4
-	uint32_t num_embeddings {};
-	uint32_t *indices = nullptr;
-	uint8_t *data = nullptr;
-};
+struct Cluster {
+	using data_t = DataType_t<q>;
 
-template <>
-struct Cluster<F32> {
 	Cluster(uint32_t num_embeddings, uint32_t num_dimensions)
 	    : num_embeddings(num_embeddings), indices(new uint32_t[num_embeddings]),
-	      data(new float[static_cast<uint64_t>(num_embeddings * num_dimensions)]) {
+	      data(new data_t[static_cast<uint64_t>(num_embeddings) * num_dimensions]) {
 	}
 
 	~Cluster() {
@@ -95,11 +118,10 @@ struct Cluster<F32> {
 
 	uint32_t num_embeddings {};
 	uint32_t *indices = nullptr;
-	float *data = nullptr;
+	data_t *data = nullptr;
 };
 
-template <Quantization q>
-using Heap = typename std::priority_queue<KNNCandidate<q>, std::vector<KNNCandidate<q>>, VectorComparator<q>>;
+using Heap = std::priority_queue<KNNCandidate, std::vector<KNNCandidate>, VectorComparator>;
 
 struct PDXDimensionSplit {
 	const uint32_t horizontal_dimensions;
