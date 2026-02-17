@@ -69,8 +69,13 @@ PDXearchIndex::PDXearchIndex(const string &name, IndexConstraintType index_const
 		    make_uniq<PDXearchWrapperGlobalF32>(dist_metric, num_dimensions, n_probe, seed, estimated_cardinality);
 #endif
 	} else if (quantization == PDX::Quantization::U8) {
+#ifndef PDX_USE_ALTERNATIVE_GLOBAL_VERSION
 		pdxearch_wrapper =
 		    make_uniq<PDXearchWrapperU8>(dist_metric, num_dimensions, n_probe, seed, estimated_cardinality);
+#else
+		pdxearch_wrapper =
+		    make_uniq<PDXearchWrapperGlobalU8>(dist_metric, num_dimensions, n_probe, seed, estimated_cardinality);
+#endif
 	} else {
 		throw InternalException("Unsupported quantization: %s", quantization);
 	}
