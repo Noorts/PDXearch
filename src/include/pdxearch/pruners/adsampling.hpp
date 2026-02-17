@@ -27,15 +27,12 @@ public:
 		}
 #ifdef HAS_FFTW
 		if (num_dimensions >= D_THRESHOLD_FOR_DCT_ROTATION) {
-			matrix = Eigen::Map<const matrix_t>(
-			    matrix_p, 1, num_dimensions);
+			matrix = Eigen::Map<const matrix_t>(matrix_p, 1, num_dimensions);
 		} else {
-			matrix = Eigen::Map<const matrix_t>(
-			    matrix_p, num_dimensions, num_dimensions);
+			matrix = Eigen::Map<const matrix_t>(matrix_p, num_dimensions, num_dimensions);
 		}
 #else
-		matrix = Eigen::Map<const matrix_t>(
-		    matrix_p, num_dimensions, num_dimensions);
+		matrix = Eigen::Map<const matrix_t>(matrix_p, num_dimensions, num_dimensions);
 #endif
 	}
 
