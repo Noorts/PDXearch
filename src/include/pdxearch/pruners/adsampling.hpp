@@ -101,7 +101,7 @@ private:
 	void Rotate(const float *PDX_RESTRICT const embeddings, float *PDX_RESTRICT const out_buffer,
 	            const size_t n) const {
 		Eigen::Map<const MatrixR> embeddings_matrix(embeddings, static_cast<Eigen::Index>(n),
-		                                             static_cast<Eigen::Index>(num_dimensions));
+		                                            static_cast<Eigen::Index>(num_dimensions));
 		Eigen::Map<MatrixR> out(out_buffer, static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(num_dimensions));
 		out.noalias() = embeddings_matrix * matrix.transpose();
 	}
