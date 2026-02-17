@@ -15,6 +15,7 @@ namespace PDX {
  ******************************************************************/
 template <Quantization Q = F32>
 class ADSamplingPruner {
+	using matrix_t = eigen_matrix_t;
 
 public:
 	const uint32_t num_dimensions;
@@ -26,14 +27,14 @@ public:
 		}
 #ifdef HAS_FFTW
 		if (num_dimensions >= D_THRESHOLD_FOR_DCT_ROTATION) {
-			matrix = Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(
+			matrix = Eigen::Map<const matrix_t>(
 			    matrix_p, 1, num_dimensions);
 		} else {
-			matrix = Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(
+			matrix = Eigen::Map<const matrix_t>(
 			    matrix_p, num_dimensions, num_dimensions);
 		}
 #else
-		matrix = Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(
+		matrix = Eigen::Map<const matrix_t>(
 		    matrix_p, num_dimensions, num_dimensions);
 #endif
 	}
@@ -68,7 +69,7 @@ public:
 
 private:
 	float pruning_aggressiveness = ADSAMPLING_PRUNING_AGGRESIVENESS;
-	Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> matrix;
+	matrix_t matrix;
 	std::vector<float> ratios;
 
 	float GetRatio(const size_t &visited_dimensions) const {

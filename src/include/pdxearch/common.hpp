@@ -5,6 +5,8 @@
 #include <cassert>
 #include <queue>
 
+#include <Eigen/Dense>
+
 #ifndef PDX_RESTRICT
 #if defined(__GNUC__) || defined(__clang__)
 #define PDX_RESTRICT __restrict__
@@ -31,18 +33,20 @@ static constexpr float PROPORTION_HORIZONTAL_DIM = 0.75f;
 static constexpr size_t D_THRESHOLD_FOR_DCT_ROTATION = 512;
 static constexpr size_t PDX_MAX_DIMS = 65536;
 static constexpr size_t H_DIM_SIZE = 64;
+static constexpr size_t U8_INTERLEAVE_SIZE = 4;
 static constexpr uint32_t DIMENSIONS_FETCHING_SIZES[20] = {16,  16,  32,  32,  32,  32,  64,  64,   64,   64,
                                                            128, 128, 128, 128, 256, 256, 512, 1024, 2048, 65536};
 
-static constexpr bool AllFetchingSizesMultipleOf4() {
+static constexpr bool AllFetchingSizesMultipleOfU8InterleaveSize() {
 	for (auto s : DIMENSIONS_FETCHING_SIZES) {
-		if (s % 4 != 0) {
+		if (s % U8_INTERLEAVE_SIZE != 0) {
 			return false;
 		}
 	}
 	return true;
 }
-static_assert(AllFetchingSizesMultipleOf4(), "All DIMENSIONS_FETCHING_SIZES must be multiples of 4");
+static_assert(AllFetchingSizesMultipleOfU8InterleaveSize(),
+              "All DIMENSIONS_FETCHING_SIZES must be multiples of U8_INTERLEAVE_SIZE");
 
 // Epsilon0 parameter of ADSampling (Reference: https://dl.acm.org/doi/abs/10.1145/3589282)
 static constexpr float ADSAMPLING_PRUNING_AGGRESIVENESS = 1.5f;
@@ -90,6 +94,8 @@ struct QuantizedVectorType<F32> {
 };
 template <Quantization Q>
 using pdx_quantized_embedding_t = typename QuantizedVectorType<Q>::type;
+
+using eigen_matrix_t = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
 struct KNNCandidate {
 	uint32_t index;
