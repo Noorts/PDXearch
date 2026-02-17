@@ -14,7 +14,7 @@ template <>
 class SIMDComputer<DistanceMetric::L2SQ, Quantization::F32> {
 public:
 	using DISTANCE_TYPE = DistanceType_t<F32>;
-	using QUERY_TYPE = QuantizedVectorType_t<F32>;
+	using QUERY_TYPE = QuantizedEmbeddingType_t<F32>;
 	using DATA_TYPE = DataType_t<F32>;
 	using scalar_computer = ScalarComputer<DistanceMetric::L2SQ, Quantization::F32>;
 
@@ -84,7 +84,7 @@ template <>
 class SIMDComputer<DistanceMetric::L2SQ, Quantization::U8> {
 public:
 	using DISTANCE_TYPE = DistanceType_t<U8>;
-	using QUERY_TYPE = QuantizedVectorType_t<U8>;
+	using QUERY_TYPE = QuantizedEmbeddingType_t<U8>;
 	using DATA_TYPE = DataType_t<U8>;
 
 	template <bool SKIP_PRUNED>
