@@ -87,9 +87,8 @@ public:
 	static void Vertical(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t n_vectors,
 	                     size_t total_vectors, size_t start_dimension, size_t end_dimension, DISTANCE_TYPE *distances_p,
 	                     const uint32_t *pruning_positions = nullptr) {
-		// TODO: Handle tail in dimension length, for now im not going to worry on that as all the datasets are
-		// divisible by 4
-		for (size_t dim_idx = start_dimension; dim_idx < end_dimension; dim_idx += 4) {
+		size_t dim_idx = start_dimension;
+		for (; dim_idx + 4 <= end_dimension; dim_idx += 4) {
 			uint32_t dimension_idx = dim_idx;
 			uint8x8_t vals = vld1_u8(&query[dimension_idx]);
 			size_t offset_to_dimension_start = dimension_idx * total_vectors;
@@ -111,13 +110,26 @@ public:
 				if constexpr (SKIP_PRUNED) {
 					vector_idx = pruning_positions[vector_idx];
 				}
-				// L2
 				int to_multiply_a = query[dimension_idx] - data[offset_to_dimension_start + (vector_idx * 4)];
 				int to_multiply_b = query[dimension_idx + 1] - data[offset_to_dimension_start + (vector_idx * 4) + 1];
 				int to_multiply_c = query[dimension_idx + 2] - data[offset_to_dimension_start + (vector_idx * 4) + 2];
 				int to_multiply_d = query[dimension_idx + 3] - data[offset_to_dimension_start + (vector_idx * 4) + 3];
 				distances_p[vector_idx] += (to_multiply_a * to_multiply_a) + (to_multiply_b * to_multiply_b) +
 				                           (to_multiply_c * to_multiply_c) + (to_multiply_d * to_multiply_d);
+			}
+		}
+		if (dim_idx < end_dimension) {
+			auto remaining = static_cast<uint32_t>(end_dimension - dim_idx);
+			size_t offset = dim_idx * total_vectors;
+			for (size_t i = 0; i < n_vectors; ++i) {
+				size_t vector_idx = i;
+				if constexpr (SKIP_PRUNED) {
+					vector_idx = pruning_positions[vector_idx];
+				}
+				for (uint32_t k = 0; k < remaining; ++k) {
+					int diff = query[dim_idx + k] - data[offset + vector_idx * remaining + k];
+					distances_p[vector_idx] += diff * diff;
+				}
 			}
 		}
 	}
@@ -134,7 +146,7 @@ public:
 		}
 		DISTANCE_TYPE distance = vaddvq_u32(sum_vec);
 		for (; i < num_dimensions; ++i) {
-			int n = (int)vector1[i] - vector2[i];
+			int n = static_cast<int>(vector1[i]) - vector2[i];
 			distance += n * n;
 		}
 		return distance;

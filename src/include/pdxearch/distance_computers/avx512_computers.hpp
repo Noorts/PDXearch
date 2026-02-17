@@ -83,8 +83,9 @@ public:
 		__m256i y_vec2_u8;
 		__m256i y_vec1_u8;
 		__m256i y_diff_u8;
-		uint32_t *query_grouped = (uint32_t *)query;
-		for (size_t dim_idx = start_dimension; dim_idx < end_dimension; dim_idx += 4) {
+		uint32_t *query_grouped = reinterpret_cast<const uint32_t *>(query);
+		size_t dim_idx = start_dimension;
+		for (; dim_idx + 4 <= end_dimension; dim_idx += 4) {
 			uint32_t dimension_idx = dim_idx;
 			size_t offset_to_dimension_start = dimension_idx * total_vectors;
 			size_t i = 0;
@@ -116,7 +117,7 @@ public:
 					_mm256_store_epi32(&distances_p[i], _mm256_dpbusds_epi32(y_res, y_diff_u8, y_diff_u8));
 				}
 			}
-			// rest
+			// Scalar tail (vectors).
 			for (; i < n_vectors; ++i) {
 				size_t vector_idx = i;
 				if constexpr (SKIP_PRUNED) {
@@ -130,6 +131,20 @@ public:
 				                           (to_multiply_c * to_multiply_c) + (to_multiply_d * to_multiply_d);
 			}
 		}
+		if (dim_idx < end_dimension) {
+			auto remaining = static_cast<uint32_t>(end_dimension - dim_idx);
+			size_t offset = dim_idx * total_vectors;
+			for (size_t i = 0; i < n_vectors; ++i) {
+				size_t vector_idx = i;
+				if constexpr (SKIP_PRUNED) {
+					vector_idx = pruning_positions[vector_idx];
+				}
+				for (uint32_t k = 0; k < remaining; ++k) {
+					int diff = query[dim_idx + k] - data[offset + vector_idx * remaining + k];
+					distances_p[vector_idx] += diff * diff;
+				}
+			}
+		}
 	}
 
 	static DISTANCE_TYPE Horizontal(const QUERY_TYPE *__restrict vector1, const DATA_TYPE *__restrict vector2,
@@ -139,7 +154,7 @@ public:
 
 	simsimd_l2sq_u8_ice_cycle:
 		if (num_dimensions < 64) {
-			const __mmask64 mask = (__mmask64)_bzhi_u64(0xFFFFFFFFFFFFFFFF, num_dimensions);
+			const __mmask64 mask = static_cast<__mmask64>(_bzhi_u64(0xFFFFFFFFFFFFFFFF, num_dimensions));
 			a_u8_vec = _mm512_maskz_loadu_epi8(mask, vector1);
 			b_u8_vec = _mm512_maskz_loadu_epi8(mask, vector2);
 			num_dimensions = 0;

@@ -56,7 +56,8 @@ public:
 	static void Vertical(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t n_vectors,
 	                     size_t total_vectors, size_t start_dimension, size_t end_dimension, DISTANCE_TYPE *distances_p,
 	                     const uint32_t *pruning_positions = nullptr) {
-		for (size_t dim_idx = start_dimension; dim_idx < end_dimension; dim_idx += 4) {
+		size_t dim_idx = start_dimension;
+		for (; dim_idx + 4 <= end_dimension; dim_idx += 4) {
 			uint32_t dimension_idx = dim_idx;
 			size_t offset_to_dimension_start = dimension_idx * total_vectors;
 			for (size_t i = 0; i < n_vectors; ++i) {
@@ -69,6 +70,20 @@ public:
 				int dc = query[dimension_idx + 2] - data[offset_to_dimension_start + (vector_idx * 4) + 2];
 				int dd = query[dimension_idx + 3] - data[offset_to_dimension_start + (vector_idx * 4) + 3];
 				distances_p[vector_idx] += (da * da) + (db * db) + (dc * dc) + (dd * dd);
+			}
+		}
+		if (dim_idx < end_dimension) {
+			auto remaining = static_cast<uint32_t>(end_dimension - dim_idx);
+			size_t offset = dim_idx * total_vectors;
+			for (size_t i = 0; i < n_vectors; ++i) {
+				size_t vector_idx = i;
+				if constexpr (SKIP_PRUNED) {
+					vector_idx = pruning_positions[vector_idx];
+				}
+				for (uint32_t k = 0; k < remaining; ++k) {
+					int diff = query[dim_idx + k] - data[offset + vector_idx * remaining + k];
+					distances_p[vector_idx] += diff * diff;
+				}
 			}
 		}
 	}

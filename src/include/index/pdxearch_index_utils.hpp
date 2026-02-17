@@ -107,10 +107,25 @@ StoreClusterEmbeddings<PDX::Quantization::U8, uint8_t>(PDX::IndexPDXIVF<PDX::Qua
 	// each vector's 4 values are stored contiguously. This enables NEON vdotq_u32 processing.
 
 	// Vertical dimensions (4-way interleaved).
-	for (size_t dim = 0; dim < index.num_vertical_dimensions; dim += 4) {
+	size_t dim = 0;
+	for (; dim + 4 <= index.num_vertical_dimensions; dim += 4) {
 		for (size_t embedding = 0; embedding < num_embeddings; embedding++) {
-			for (size_t k = 0; k < 4 && (dim + k) < index.num_vertical_dimensions; k++) {
-				cluster.data[dim * num_embeddings + embedding * 4 + k] =
+			cluster.data[dim * num_embeddings + embedding * 4 + 0] =
+			    embeddings[(embedding * index.num_dimensions) + dim + 0];
+			cluster.data[dim * num_embeddings + embedding * 4 + 1] =
+			    embeddings[(embedding * index.num_dimensions) + dim + 1];
+			cluster.data[dim * num_embeddings + embedding * 4 + 2] =
+			    embeddings[(embedding * index.num_dimensions) + dim + 2];
+			cluster.data[dim * num_embeddings + embedding * 4 + 3] =
+			    embeddings[(embedding * index.num_dimensions) + dim + 3];
+		}
+	}
+	// Compact tail
+	if (dim < index.num_vertical_dimensions) {
+		auto remaining = static_cast<uint32_t>(index.num_vertical_dimensions - dim);
+		for (size_t embedding = 0; embedding < num_embeddings; embedding++) {
+			for (uint32_t k = 0; k < remaining; k++) {
+				cluster.data[dim * num_embeddings + embedding * remaining + k] =
 				    embeddings[(embedding * index.num_dimensions) + dim + k];
 			}
 		}
