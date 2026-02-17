@@ -5,6 +5,7 @@
 #include <cassert>
 #include <algorithm>
 #include <memory>
+#include <limits>
 #include "pdxearch/common.hpp"
 #include "pdxearch/db_mock/predicate_evaluator.hpp"
 #include "pdxearch/distance_computers/base_computers.hpp"
@@ -106,7 +107,11 @@ protected:
 		const std::lock_guard<std::mutex> lock(*best_k_mutex);
 		float float_threshold = pruner.GetPruningThreshold(k, heap, current_dimension_idx);
 		if constexpr (Q == U8) {
-			pruning_threshold = static_cast<DistanceType_t<Q>>(float_threshold * pdx_data.quantization_scale_squared);
+			// We need to avoid undefined behaviour when overflow happens
+			float scaled = float_threshold * pdx_data.quantization_scale_squared;
+			pruning_threshold = scaled >= static_cast<float>(std::numeric_limits<DistanceType_t<Q>>::max())
+			                        ? std::numeric_limits<DistanceType_t<Q>>::max()
+			                        : static_cast<DistanceType_t<Q>>(scaled);
 		} else {
 			pruning_threshold = float_threshold;
 		}
