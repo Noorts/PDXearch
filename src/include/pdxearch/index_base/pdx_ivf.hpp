@@ -48,10 +48,10 @@ public:
 	const bool is_normalized {};
 	std::vector<float> centroids;
 
-	float quantization_scale = 1.0f;
-	float quantization_scale_squared = 1.0f;
-	float inverse_quantization_scale_squared = 1.0f;
-	float quantization_base = 0.0f;
+	const float quantization_scale = 1.0f;
+	const float quantization_scale_squared = 1.0f;
+	const float inverse_quantization_scale_squared = 1.0f;
+	const float quantization_base = 0.0f;
 
 	IndexPDXIVF(uint32_t num_dimensions, uint64_t total_num_embeddings, uint32_t num_clusters, bool is_normalized,
 	            float quantization_scale, float quantization_base)
