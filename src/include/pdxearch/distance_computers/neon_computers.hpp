@@ -63,6 +63,19 @@ public:
 	};
 };
 
+// Equivalent of vdotq_u32(acc, a, a) for squared accumulation.
+static inline uint32x4_t squared_dot_accumulate(uint32x4_t acc, uint8x16_t a) {
+#ifdef __ARM_FEATURE_DOTPROD
+	return vdotq_u32(acc, a, a);
+#else
+	uint16x8_t sq_lo = vmull_u8(vget_low_u8(a), vget_low_u8(a));
+	uint16x8_t sq_hi = vmull_u8(vget_high_u8(a), vget_high_u8(a));
+	uint32x4_t partial_lo = vpaddlq_u16(sq_lo);
+	uint32x4_t partial_hi = vpaddlq_u16(sq_hi);
+	return vaddq_u32(acc, vpaddq_u32(partial_lo, partial_hi));
+#endif
+}
+
 template <>
 class SIMDComputer<DistanceMetric::L2SQ, Quantization::U8> {
 public:
@@ -90,7 +103,7 @@ public:
 					uint8x16_t vec2_u8 = vld1q_u8(
 					    &data[offset_to_dimension_start + i * 4]); // This 4 is because everytime I read 4 dimensions
 					uint8x16_t diff_u8 = vabdq_u8(vec1_u8, vec2_u8);
-					vst1q_u32(&distances_p[i], vdotq_u32(res, diff_u8, diff_u8));
+					vst1q_u32(&distances_p[i], squared_dot_accumulate(res, diff_u8));
 				}
 			}
 			for (; i < n_vectors; ++i) {
@@ -117,7 +130,7 @@ public:
 			uint8x16_t a_vec = vld1q_u8(vector1 + i);
 			uint8x16_t b_vec = vld1q_u8(vector2 + i);
 			uint8x16_t d_vec = vabdq_u8(a_vec, b_vec);
-			sum_vec = vdotq_u32(sum_vec, d_vec, d_vec);
+			sum_vec = squared_dot_accumulate(sum_vec, d_vec);
 		}
 		DISTANCE_TYPE distance = vaddvq_u32(sum_vec);
 		for (; i < num_dimensions; ++i) {
