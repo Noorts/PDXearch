@@ -98,10 +98,10 @@ StoreClusterEmbeddings<PDX::Quantization::F32, float>(PDX::IndexPDXIVF<PDX::Quan
 }
 
 template <>
-inline void StoreClusterEmbeddings<PDX::Quantization::U8, uint8_t>(
-    PDX::IndexPDXIVF<PDX::Quantization::U8>::CLUSTER_TYPE &cluster,
-    const PDX::IndexPDXIVF<PDX::Quantization::U8> &index, const uint8_t *const embeddings,
-    const size_t num_embeddings) {
+inline void
+StoreClusterEmbeddings<PDX::Quantization::U8, uint8_t>(PDX::IndexPDXIVF<PDX::Quantization::U8>::CLUSTER_TYPE &cluster,
+                                                       const PDX::IndexPDXIVF<PDX::Quantization::U8> &index,
+                                                       const uint8_t *const embeddings, const size_t num_embeddings) {
 	// Store the cluster's data using the transposed PDX layout for U8.
 	// The vertical block uses 4-way interleaving: for each group of 4 consecutive dimensions,
 	// each vector's 4 values are stored contiguously. This enables NEON vdotq_u32 processing.
@@ -120,8 +120,7 @@ inline void StoreClusterEmbeddings<PDX::Quantization::U8, uint8_t>(
 	size_t current_horizontal_offset = index.num_vertical_dimensions * num_embeddings;
 
 	for (size_t dim_group = 0; dim_group < index.num_horizontal_dimensions; dim_group += PDX::H_DIM_SIZE) {
-		size_t group_size =
-		    std::min(PDX::H_DIM_SIZE, static_cast<size_t>(index.num_horizontal_dimensions) - dim_group);
+		size_t group_size = std::min(PDX::H_DIM_SIZE, static_cast<size_t>(index.num_horizontal_dimensions) - dim_group);
 		size_t actual_dim = index.num_vertical_dimensions + dim_group;
 
 		for (size_t embedding = 0; embedding < num_embeddings; embedding++) {

@@ -94,8 +94,7 @@ void PDXearchIndex::SetUpIndexForRowGroup(const row_t *const row_ids, const floa
 }
 
 void PDXearchIndex::InitializeSearchForRowGroup(float *const preprocessed_query, const idx_t limit,
-                                                const idx_t row_group_id, PDX::Heap &heap,
-                                                std::mutex &heap_mutex) {
+                                                const idx_t row_group_id, PDX::Heap &heap, std::mutex &heap_mutex) {
 	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
 		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())
 		    ->InitializeSearchForRowGroup(preprocessed_query, limit, row_group_id, heap, heap_mutex);

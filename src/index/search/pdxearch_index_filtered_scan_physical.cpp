@@ -64,8 +64,7 @@ public:
 	std::mutex global_heap_mutex;
 	// Element used to initialize the global heap. PDXearch uses the top of the heap in its operations, thus there must
 	// be an initial element. This element is always filtered out when the heap is transformed into a result set.
-	static constexpr PDX::KNNCandidate HEAP_INITIALIZATION_ELEMENT = {1337,
-	                                                                            std::numeric_limits<float>::max()};
+	static constexpr PDX::KNNCandidate HEAP_INITIALIZATION_ELEMENT = {1337, std::numeric_limits<float>::max()};
 
 	// For iteration support:
 	// Based on the n_probe.

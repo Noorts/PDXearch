@@ -47,7 +47,12 @@ public:
 	explicit ScalarQuantizer(size_t num_dimensions) : Quantizer(num_dimensions) {
 	}
 
+#ifdef __AVX512F__
+	// We rely on _mm512_dpbusds_epi32 that has asymmetric operands
+	static constexpr uint8_t MAX_VALUE = 127;
+#else
 	static constexpr uint8_t MAX_VALUE = 255;
+#endif
 
 	static ScalarQuantizationParams ComputeQuantizationParams(const float *embeddings, size_t total_elements) {
 		float global_min = std::numeric_limits<float>::max();

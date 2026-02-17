@@ -100,15 +100,13 @@ protected:
 
 	// The pruning threshold by default is the top of the heap
 	template <Quantization Q = q>
-	void
-	GetPruningThreshold(uint32_t k,
-	                    std::priority_queue<KNNCandidate, std::vector<KNNCandidate>, VectorComparator> &heap,
-	                    DistanceType_t<Q> &pruning_threshold, uint32_t current_dimension_idx) {
+	void GetPruningThreshold(uint32_t k,
+	                         std::priority_queue<KNNCandidate, std::vector<KNNCandidate>, VectorComparator> &heap,
+	                         DistanceType_t<Q> &pruning_threshold, uint32_t current_dimension_idx) {
 		const std::lock_guard<std::mutex> lock(*best_k_mutex);
 		float float_threshold = pruner.GetPruningThreshold(k, heap, current_dimension_idx);
 		if constexpr (Q == U8) {
-			pruning_threshold =
-			    static_cast<DistanceType_t<Q>>(float_threshold * pdx_data.quantization_scale_squared);
+			pruning_threshold = static_cast<DistanceType_t<Q>>(float_threshold * pdx_data.quantization_scale_squared);
 		} else {
 			pruning_threshold = float_threshold;
 		}
@@ -200,8 +198,8 @@ protected:
 	            const size_t n_vectors, uint32_t k, float tuples_threshold, uint32_t *pruning_positions,
 	            DistanceType_t<Q> *pruning_distances, DistanceType_t<Q> &pruning_threshold,
 	            std::priority_queue<KNNCandidate, std::vector<KNNCandidate>, VectorComparator> &heap,
-	            uint32_t &current_dimension_idx, size_t &n_vectors_not_pruned,
-	            uint32_t passing_tuples = 0, uint8_t *selection_vector = nullptr) {
+	            uint32_t &current_dimension_idx, size_t &n_vectors_not_pruned, uint32_t passing_tuples = 0,
+	            uint8_t *selection_vector = nullptr) {
 		current_dimension_idx = 0;
 		size_t cur_subgrouping_size_idx = 0;
 		size_t tuples_needed_to_exit = static_cast<size_t>(std::ceil(tuples_threshold * static_cast<float>(n_vectors)));
@@ -332,7 +330,7 @@ public:
 		cluster_indices_in_access_order_offset = 0; // Reset cluster index offset for new search.
 		if constexpr (q == U8) {
 			quantizer.QuantizeVector(preprocessed_query, pdx_data.quantization_base, pdx_data.quantization_scale,
-			                       quantized_query_buf.get());
+			                         quantized_query_buf.get());
 			this->prepared_query = quantized_query_buf.get();
 		} else {
 			this->prepared_query = preprocessed_query;
@@ -365,8 +363,7 @@ public:
 			       pruning_positions.get(), pruning_distances.get(), pruning_threshold, *best_k, current_dimension_idx,
 			       n_vectors_not_pruned);
 			Prune(prepared_query, cluster.data, cluster.num_embeddings, k, pruning_positions.get(),
-			      pruning_distances.get(), pruning_threshold, *best_k, current_dimension_idx,
-			      n_vectors_not_pruned);
+			      pruning_distances.get(), pruning_threshold, *best_k, current_dimension_idx, n_vectors_not_pruned);
 			if (n_vectors_not_pruned) {
 				const std::lock_guard<std::mutex> lock(*best_k_mutex);
 				MergeIntoHeap(cluster.indices, n_vectors_not_pruned, k, pruning_positions.get(),
@@ -406,8 +403,7 @@ public:
 
 			Warmup<q, true>(prepared_query, cluster.data, cluster.num_embeddings, k, selectivity_threshold,
 			                pruning_positions.get(), pruning_distances.get(), pruning_threshold, *best_k,
-			                current_dimension_idx, n_vectors_not_pruned, passing_tuples,
-			                selection_vector);
+			                current_dimension_idx, n_vectors_not_pruned, passing_tuples, selection_vector);
 			Prune<q, true>(prepared_query, cluster.data, cluster.num_embeddings, k, pruning_positions.get(),
 			               pruning_distances.get(), pruning_threshold, *best_k, current_dimension_idx,
 			               n_vectors_not_pruned, selection_vector);
@@ -541,7 +537,7 @@ public:
 		QUANTIZED_VECTOR_TYPE *local_prepared_query;
 		if constexpr (q == U8) {
 			quantizer.QuantizeVector(query.get(), pdx_data.quantization_base, pdx_data.quantization_scale,
-			                       local_quantized_query.get());
+			                         local_quantized_query.get());
 			local_prepared_query = local_quantized_query.get();
 		} else {
 			local_prepared_query = query.get();
@@ -570,8 +566,7 @@ public:
 			       pruning_positions.get(), pruning_distances.get(), pruning_threshold, local_heap,
 			       current_dimension_idx, n_vectors_not_pruned);
 			Prune(local_prepared_query, cluster.data, cluster.num_embeddings, k, pruning_positions.get(),
-			      pruning_distances.get(), pruning_threshold, local_heap, current_dimension_idx,
-			      n_vectors_not_pruned);
+			      pruning_distances.get(), pruning_threshold, local_heap, current_dimension_idx, n_vectors_not_pruned);
 			if (n_vectors_not_pruned) {
 				MergeIntoHeap(cluster.indices, n_vectors_not_pruned, k, pruning_positions.get(),
 				              pruning_distances.get(), local_heap);
@@ -605,7 +600,7 @@ public:
 		QUANTIZED_VECTOR_TYPE *local_prepared_query;
 		if constexpr (q == U8) {
 			quantizer.QuantizeVector(query.get(), pdx_data.quantization_base, pdx_data.quantization_scale,
-			                       local_quantized_query.get());
+			                         local_quantized_query.get());
 			local_prepared_query = local_quantized_query.get();
 		} else {
 			local_prepared_query = query.get();
@@ -632,14 +627,13 @@ public:
 			if (local_heap.size() < k) {
 				// We cannot prune until we fill the heap
 				FilteredStart(local_prepared_query, cluster.data, cluster.num_embeddings, k, cluster.indices,
-				              pruning_positions.get(), pruning_distances.get(), local_heap,
-				              selection_vector, passing_tuples);
+				              pruning_positions.get(), pruning_distances.get(), local_heap, selection_vector,
+				              passing_tuples);
 				continue;
 			}
 			Warmup<q, true>(local_prepared_query, cluster.data, cluster.num_embeddings, k, selectivity_threshold,
 			                pruning_positions.get(), pruning_distances.get(), pruning_threshold, local_heap,
-			                current_dimension_idx, n_vectors_not_pruned, passing_tuples,
-			                selection_vector);
+			                current_dimension_idx, n_vectors_not_pruned, passing_tuples, selection_vector);
 			Prune<q, true>(local_prepared_query, cluster.data, cluster.num_embeddings, k, pruning_positions.get(),
 			               pruning_distances.get(), pruning_threshold, local_heap, current_dimension_idx,
 			               n_vectors_not_pruned, selection_vector);

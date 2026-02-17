@@ -164,12 +164,11 @@ public:
 			    embeddings, static_cast<size_t>(num_embeddings) * num_dimensions);
 			quantization_base = params.quantization_base;
 			quantization_scale = params.quantization_scale;
-			row_group.index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings,
-			                                                  num_clusters_per_row_group, IsNormalized(),
-			                                                  quantization_scale, quantization_base);
+			row_group.index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters_per_row_group,
+			                                                 IsNormalized(), quantization_scale, quantization_base);
 		} else {
-			row_group.index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings,
-			                                                  num_clusters_per_row_group, IsNormalized());
+			row_group.index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters_per_row_group,
+			                                                 IsNormalized());
 		}
 		row_group.pruner = make_uniq<PDX::ADSamplingPruner<Q>>(num_dimensions, rotation_matrix.get());
 
@@ -291,8 +290,8 @@ private:
 	std::unique_ptr<PDX::PDXearch<Q>> searcher;
 
 public:
-	PDXearchWrapperGlobal(PDX::DistanceMetric distance_metric, uint32_t num_dimensions, uint32_t n_probe,
-	                      int32_t seed, idx_t estimated_cardinality)
+	PDXearchWrapperGlobal(PDX::DistanceMetric distance_metric, uint32_t num_dimensions, uint32_t n_probe, int32_t seed,
+	                      idx_t estimated_cardinality)
 	    : PDXearchWrapper(Q, distance_metric, num_dimensions, n_probe, seed),
 	      num_clusters(ComputeNumberOfClusters(estimated_cardinality)), total_num_embeddings(estimated_cardinality),
 	      row_id_cluster_mapping(estimated_cardinality),
@@ -317,14 +316,14 @@ public:
 			quantization_base = params.quantization_base;
 			quantization_scale = params.quantization_scale;
 			index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters, IsNormalized(),
-			                                        quantization_scale, quantization_base);
+			                                       quantization_scale, quantization_base);
 		} else {
 			index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters, IsNormalized());
 		}
 
 		// Compute K-means centroids and embedding-to-centroid assignment (always on float embeddings).
-		KMeansResult kmeans_result = ComputeKMeans(embeddings, num_embeddings, num_dimensions, num_clusters,
-		                                           GetDistanceMetric(), GetSeed());
+		KMeansResult kmeans_result =
+		    ComputeKMeans(embeddings, num_embeddings, num_dimensions, num_clusters, GetDistanceMetric(), GetSeed());
 
 		// Store centroids.
 		index->centroids = std::move(kmeans_result.centroids);
@@ -365,7 +364,8 @@ public:
 				}
 			}
 
-			StoreClusterEmbeddings<Q, EmbeddingStorageType>(cluster, *index, tmp_cluster_embeddings.get(), cluster_size);
+			StoreClusterEmbeddings<Q, EmbeddingStorageType>(cluster, *index, tmp_cluster_embeddings.get(),
+			                                                cluster_size);
 		}
 
 		// Note: the searcher depends on a fully initialized index in its constructor.
