@@ -205,9 +205,9 @@ public:
 
 				if constexpr (Q == PDX::U8) {
 					PDX::ScalarQuantizer<Q> quantizer(num_dimensions);
-					quantizer.QuantizeVector(embeddings + (embedding_idx * num_dimensions), quantization_base,
-					                         quantization_scale,
-					                         tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions));
+					quantizer.QuantizeEmbedding(embeddings + (embedding_idx * num_dimensions), quantization_base,
+					                            quantization_scale,
+					                            tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions));
 				} else {
 					memcpy(tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions),
 					       embeddings + (embedding_idx * num_dimensions), num_dimensions * sizeof(float));
@@ -355,9 +355,9 @@ public:
 
 				if constexpr (Q == PDX::U8) {
 					PDX::ScalarQuantizer<Q> quantizer(num_dimensions);
-					quantizer.QuantizeVector(embeddings + (embedding_idx * num_dimensions), quantization_base,
-					                         quantization_scale,
-					                         tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions));
+					quantizer.QuantizeEmbedding(embeddings + (embedding_idx * num_dimensions), quantization_base,
+					                            quantization_scale,
+					                            tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions));
 				} else {
 					memcpy(tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions),
 					       embeddings + (embedding_idx * num_dimensions), num_dimensions * sizeof(float));

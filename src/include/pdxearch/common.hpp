@@ -79,7 +79,7 @@ struct QuantizedVectorType<F32> {
 	using type = float;
 };
 template <Quantization q>
-using QuantizedVectorType_t = typename QuantizedVectorType<q>::type;
+using QuantizedEmbeddingType_t = typename QuantizedVectorType<q>::type;
 
 struct KNNCandidate {
 	uint32_t index;

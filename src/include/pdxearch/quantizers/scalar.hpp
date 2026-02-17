@@ -42,7 +42,7 @@ public:
 template <Quantization q = U8>
 class ScalarQuantizer : public Quantizer {
 public:
-	using quantized_vector_t = QuantizedVectorType_t<q>;
+	using quantized_embedding_t = QuantizedEmbeddingType_t<q>;
 
 	explicit ScalarQuantizer(size_t num_dimensions) : Quantizer(num_dimensions) {
 	}
@@ -54,27 +54,27 @@ public:
 	static constexpr uint8_t MAX_VALUE = 255;
 #endif
 
-	static ScalarQuantizationParams ComputeQuantizationParams(const float *embeddings, size_t total_elements) {
+	static ScalarQuantizationParams ComputeQuantizationParams(const float *embeddings, const size_t total_elements) {
 		float global_min = std::numeric_limits<float>::max();
 		float global_max = std::numeric_limits<float>::lowest();
 		for (size_t i = 0; i < total_elements; ++i) {
 			global_min = std::min(global_min, embeddings[i]);
 			global_max = std::max(global_max, embeddings[i]);
 		}
-		float range = global_max - global_min;
+		const float range = global_max - global_min;
 		return {global_min, (range > 0) ? static_cast<float>(MAX_VALUE) / range : 1.0f};
 	}
 
-	void QuantizeVector(const float *input, const float quantization_base, const float quantization_scale,
-	                    quantized_vector_t *output) {
+	void QuantizeEmbedding(const float *embedding, const float quantization_base, const float quantization_scale,
+	                       quantized_embedding_t *output_quantized_embedding) {
 		for (size_t i = 0; i < num_dimensions; ++i) {
-			int rounded = static_cast<int>(std::round((input[i] - quantization_base) * quantization_scale));
+			const int rounded = static_cast<int>(std::round((embedding[i] - quantization_base) * quantization_scale));
 			if (PDX_UNLIKELY(rounded > MAX_VALUE)) {
-				output[i] = MAX_VALUE;
+				output_quantized_embedding[i] = MAX_VALUE;
 			} else if (PDX_UNLIKELY(rounded < 0)) {
-				output[i] = 0;
+				output_quantized_embedding[i] = 0;
 			} else {
-				output[i] = static_cast<uint8_t>(rounded);
+				output_quantized_embedding[i] = static_cast<uint8_t>(rounded);
 			}
 		}
 	}

@@ -20,7 +20,7 @@ template <Quantization q = F32, class Index = IndexPDXIVF<q>, class Quantizer = 
 class PDXearch {
 public:
 	using DISTANCES_TYPE = DistanceType_t<q>;
-	using QUANTIZED_VECTOR_TYPE = QuantizedVectorType_t<q>;
+	using QUANTIZED_EMBEDDING_TYPE = QuantizedEmbeddingType_t<q>;
 	using INDEX_TYPE = Index;
 	using CLUSTER_TYPE = Cluster<q>;
 	using KNNCandidate_t = KNNCandidate;
@@ -34,7 +34,7 @@ public:
 	    : quantizer(data_index.num_dimensions), pruner(pruner), pdx_data(data_index),
 	      cluster_offsets(new size_t[data_index.num_clusters]),
 	      cluster_indices_in_access_order(new uint32_t[data_index.num_clusters]),
-	      quantized_query_buf(new QUANTIZED_VECTOR_TYPE[data_index.num_dimensions]) {
+	      quantized_query_buf(new QUANTIZED_EMBEDDING_TYPE[data_index.num_dimensions]) {
 		for (size_t i = 0; i < data_index.num_clusters; ++i) {
 			cluster_offsets[i] = total_embeddings;
 			total_embeddings += data_index.clusters[i].num_embeddings;
@@ -82,7 +82,7 @@ protected:
 
 	// Start: State for the current filtered search.
 	uint32_t k = 0;
-	QUANTIZED_VECTOR_TYPE *prepared_query = nullptr;
+	QUANTIZED_EMBEDDING_TYPE *prepared_query = nullptr;
 	// Predicate evaluator for this rowgroup.
 	std::unique_ptr<PredicateEvaluator> predicate_evaluator;
 	// End
@@ -90,9 +90,9 @@ protected:
 	Heap *best_k = nullptr;
 	std::mutex *best_k_mutex = nullptr;
 
-	// Per-search query buffers, filled by QuantizeVector in InitializeSearch (U8 path).
+	// Per-search query buffers, filled by QuantizeEmbedding in InitializeSearch (U8 path).
 	// Used by Search/FilteredSearch and passed to Warmup/Prune.
-	std::unique_ptr<QUANTIZED_VECTOR_TYPE[]> quantized_query_buf;
+	std::unique_ptr<QUANTIZED_EMBEDDING_TYPE[]> quantized_query_buf;
 
 	template <Quantization Q = q>
 	void ResetPruningDistances(size_t n_vectors, DistanceType_t<Q> *pruning_distances) {
@@ -199,7 +199,7 @@ protected:
 
 	// On the warmup phase, we keep scanning dimensions until the amount of not-yet pruned vectors is low
 	template <Quantization Q = q, bool FILTERED = false>
-	void Warmup(const QuantizedVectorType_t<Q> *__restrict query, const DataType_t<Q> *__restrict data,
+	void Warmup(const QuantizedEmbeddingType_t<Q> *__restrict query, const DataType_t<Q> *__restrict data,
 	            const size_t n_vectors, uint32_t k, float tuples_threshold, uint32_t *pruning_positions,
 	            DistanceType_t<Q> *pruning_distances, DistanceType_t<Q> &pruning_threshold,
 	            std::priority_queue<KNNCandidate, std::vector<KNNCandidate>, VectorComparator> &heap,
@@ -235,7 +235,7 @@ protected:
 
 	// We scan only the not-yet pruned vectors
 	template <Quantization Q = q, bool FILTERED = false>
-	void Prune(const QuantizedVectorType_t<Q> *__restrict query, const DataType_t<Q> *__restrict data,
+	void Prune(const QuantizedEmbeddingType_t<Q> *__restrict query, const DataType_t<Q> *__restrict data,
 	           const size_t n_vectors, uint32_t k, uint32_t *pruning_positions, DistanceType_t<Q> *pruning_distances,
 	           DistanceType_t<Q> &pruning_threshold,
 	           std::priority_queue<KNNCandidate, std::vector<KNNCandidate>, VectorComparator> &heap,
@@ -334,8 +334,8 @@ public:
 
 		cluster_indices_in_access_order_offset = 0; // Reset cluster index offset for new search.
 		if constexpr (q == U8) {
-			quantizer.QuantizeVector(preprocessed_query, pdx_data.quantization_base, pdx_data.quantization_scale,
-			                         quantized_query_buf.get());
+			quantizer.QuantizeEmbedding(preprocessed_query, pdx_data.quantization_base, pdx_data.quantization_scale,
+			                            quantized_query_buf.get());
 			this->prepared_query = quantized_query_buf.get();
 		} else {
 			this->prepared_query = preprocessed_query;
@@ -427,7 +427,7 @@ public:
 
 	// On the first bucket, we do a full scan (we do not prune vectors)
 	template <Quantization Q = q>
-	void Start(const QuantizedVectorType_t<Q> *__restrict query, const DataType_t<Q> *data, const size_t n_vectors,
+	void Start(const QuantizedEmbeddingType_t<Q> *__restrict query, const DataType_t<Q> *data, const size_t n_vectors,
 	           uint32_t k, const uint32_t *vector_indices, uint32_t *pruning_positions,
 	           DistanceType_t<Q> *pruning_distances,
 	           std::priority_queue<KNNCandidate, std::vector<KNNCandidate>, VectorComparator> &heap) {
@@ -466,7 +466,7 @@ public:
 
 	// On the first bucket, we do a full scan (we do not prune vectors)
 	template <Quantization Q = q>
-	void FilteredStart(const QuantizedVectorType_t<Q> *__restrict query, const DataType_t<Q> *data,
+	void FilteredStart(const QuantizedEmbeddingType_t<Q> *__restrict query, const DataType_t<Q> *data,
 	                   const size_t n_vectors, uint32_t k, const uint32_t *vector_indices, uint32_t *pruning_positions,
 	                   DistanceType_t<Q> *pruning_distances,
 	                   std::priority_queue<KNNCandidate, std::vector<KNNCandidate>, VectorComparator> &heap,
@@ -537,12 +537,12 @@ public:
 		std::unique_ptr<uint32_t[]> local_cluster_order(new uint32_t[pdx_data.num_clusters]);
 		GetClustersAccessOrderIVF(query.get(), pdx_data, clusters_to_visit, local_cluster_order.get());
 		// PDXearch core
-		std::unique_ptr<QUANTIZED_VECTOR_TYPE[]> local_quantized_query(
-		    new QUANTIZED_VECTOR_TYPE[pdx_data.num_dimensions]);
-		QUANTIZED_VECTOR_TYPE *local_prepared_query;
+		std::unique_ptr<QUANTIZED_EMBEDDING_TYPE[]> local_quantized_query(
+		    new QUANTIZED_EMBEDDING_TYPE[pdx_data.num_dimensions]);
+		QUANTIZED_EMBEDDING_TYPE *local_prepared_query;
 		if constexpr (q == U8) {
-			quantizer.QuantizeVector(query.get(), pdx_data.quantization_base, pdx_data.quantization_scale,
-			                         local_quantized_query.get());
+			quantizer.QuantizeEmbedding(query.get(), pdx_data.quantization_base, pdx_data.quantization_scale,
+			                            local_quantized_query.get());
 			local_prepared_query = local_quantized_query.get();
 		} else {
 			local_prepared_query = query.get();
@@ -600,12 +600,12 @@ public:
 		std::unique_ptr<uint32_t[]> local_cluster_order(new uint32_t[pdx_data.num_clusters]);
 		GetClustersAccessOrderIVF(query.get(), pdx_data, clusters_to_visit, local_cluster_order.get());
 		// PDXearch core
-		std::unique_ptr<QUANTIZED_VECTOR_TYPE[]> local_quantized_query(
-		    new QUANTIZED_VECTOR_TYPE[pdx_data.num_dimensions]);
-		QUANTIZED_VECTOR_TYPE *local_prepared_query;
+		std::unique_ptr<QUANTIZED_EMBEDDING_TYPE[]> local_quantized_query(
+		    new QUANTIZED_EMBEDDING_TYPE[pdx_data.num_dimensions]);
+		QUANTIZED_EMBEDDING_TYPE *local_prepared_query;
 		if constexpr (q == U8) {
-			quantizer.QuantizeVector(query.get(), pdx_data.quantization_base, pdx_data.quantization_scale,
-			                         local_quantized_query.get());
+			quantizer.QuantizeEmbedding(query.get(), pdx_data.quantization_base, pdx_data.quantization_scale,
+			                            local_quantized_query.get());
 			local_prepared_query = local_quantized_query.get();
 		} else {
 			local_prepared_query = query.get();
