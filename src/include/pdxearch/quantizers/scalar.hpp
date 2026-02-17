@@ -39,10 +39,10 @@ public:
 	const size_t num_dimensions;
 };
 
-template <Quantization q = U8>
+template <Quantization Q = U8>
 class ScalarQuantizer : public Quantizer {
 public:
-	using quantized_embedding_t = pdx_quantized_embedding_t<q>;
+	using quantized_embedding_t = pdx_quantized_embedding_t<Q>;
 
 	explicit ScalarQuantizer(size_t num_dimensions) : Quantizer(num_dimensions) {
 	}

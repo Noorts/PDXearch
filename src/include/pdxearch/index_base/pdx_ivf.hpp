@@ -8,7 +8,7 @@
 
 namespace PDX {
 
-template <Quantization q>
+template <Quantization Q>
 class IndexPDXIVF {};
 
 template <>

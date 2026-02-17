@@ -5,7 +5,7 @@
 
 namespace PDX {
 
-template <DistanceMetric alpha, Quantization q>
+template <DistanceMetric alpha, Quantization Q>
 class ScalarComputer {};
 
 template <>
@@ -16,7 +16,7 @@ public:
 	using data_t = pdx_data_t<F32>;
 
 	template <bool SKIP_PRUNED>
-	static void Vertical(const query_t *__restrict query, const data_t *__restrict data, size_t n_vectors,
+	static void Vertical(const query_t *PDX_RESTRICT query, const data_t *PDX_RESTRICT data, size_t n_vectors,
 	                     size_t total_vectors, size_t start_dimension, size_t end_dimension, distance_t *distances_p,
 	                     const uint32_t *pruning_positions = nullptr) {
 		size_t dimensions_jump_factor = total_vectors;
@@ -33,8 +33,8 @@ public:
 		}
 	}
 
-	static distance_t Horizontal(const query_t *__restrict vector1, const data_t *__restrict vector2,
-	                                size_t num_dimensions) {
+	static distance_t Horizontal(const query_t *PDX_RESTRICT vector1, const data_t *PDX_RESTRICT vector2,
+	                             size_t num_dimensions) {
 		distance_t distance = 0.0;
 #pragma clang loop vectorize(enable)
 		for (size_t dimension_idx = 0; dimension_idx < num_dimensions; ++dimension_idx) {
@@ -53,7 +53,7 @@ public:
 	using data_t = pdx_data_t<U8>;
 
 	template <bool SKIP_PRUNED>
-	static void Vertical(const query_t *__restrict query, const data_t *__restrict data, size_t n_vectors,
+	static void Vertical(const query_t *PDX_RESTRICT query, const data_t *PDX_RESTRICT data, size_t n_vectors,
 	                     size_t total_vectors, size_t start_dimension, size_t end_dimension, distance_t *distances_p,
 	                     const uint32_t *pruning_positions = nullptr) {
 		size_t dim_idx = start_dimension;
@@ -88,8 +88,8 @@ public:
 		}
 	}
 
-	static distance_t Horizontal(const query_t *__restrict vector1, const data_t *__restrict vector2,
-	                                size_t num_dimensions) {
+	static distance_t Horizontal(const query_t *PDX_RESTRICT vector1, const data_t *PDX_RESTRICT vector2,
+	                             size_t num_dimensions) {
 		distance_t distance = 0;
 		for (size_t i = 0; i < num_dimensions; ++i) {
 			int diff = static_cast<int>(vector1[i]) - static_cast<int>(vector2[i]);

@@ -57,7 +57,7 @@ enum class DistanceMetric { L2SQ, COSINE, IP };
 enum Quantization { F32, U8, F16, BF };
 
 // TODO: Do the same for indexes?
-template <Quantization q>
+template <Quantization Q>
 struct DistanceType {
 	using type = uint32_t;
 };
@@ -65,11 +65,11 @@ template <>
 struct DistanceType<F32> {
 	using type = float;
 };
-template <Quantization q>
-using pdx_distance_t = typename DistanceType<q>::type;
+template <Quantization Q>
+using pdx_distance_t = typename DistanceType<Q>::type;
 
 // TODO: Do the same for indexes?
-template <Quantization q>
+template <Quantization Q>
 struct DataType {
 	using type = uint8_t; // U8
 };
@@ -77,10 +77,10 @@ template <>
 struct DataType<F32> {
 	using type = float;
 };
-template <Quantization q>
-using pdx_data_t = typename DataType<q>::type;
+template <Quantization Q>
+using pdx_data_t = typename DataType<Q>::type;
 
-template <Quantization q>
+template <Quantization Q>
 struct QuantizedVectorType {
 	using type = uint8_t; // U8
 };
@@ -88,8 +88,8 @@ template <>
 struct QuantizedVectorType<F32> {
 	using type = float;
 };
-template <Quantization q>
-using pdx_quantized_embedding_t = typename QuantizedVectorType<q>::type;
+template <Quantization Q>
+using pdx_quantized_embedding_t = typename QuantizedVectorType<Q>::type;
 
 struct KNNCandidate {
 	uint32_t index;
@@ -102,9 +102,9 @@ struct VectorComparator {
 	}
 };
 
-template <Quantization q>
+template <Quantization Q>
 struct Cluster {
-	using data_t = pdx_data_t<q>;
+	using data_t = pdx_data_t<Q>;
 
 	Cluster(uint32_t num_embeddings, uint32_t num_dimensions)
 	    : num_embeddings(num_embeddings), indices(new uint32_t[num_embeddings]),

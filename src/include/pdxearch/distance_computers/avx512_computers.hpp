@@ -7,7 +7,7 @@
 
 namespace PDX {
 
-template <DistanceMetric alpha, Quantization q>
+template <DistanceMetric alpha, Quantization Q>
 class SIMDComputer {};
 
 template <>
@@ -18,7 +18,7 @@ public:
 	using data_t = pdx_data_t<F32>;
 
 	template <bool SKIP_PRUNED>
-	static void Vertical(const query_t *__restrict query, const data_t *__restrict data, size_t n_vectors,
+	static void Vertical(const query_t *PDX_RESTRICT query, const data_t *PDX_RESTRICT data, size_t n_vectors,
 	                     size_t total_vectors, size_t start_dimension, size_t end_dimension, distance_t *distances_p,
 	                     const uint32_t *pruning_positions = nullptr) {
 		size_t dimensions_jump_factor = total_vectors;
@@ -35,8 +35,8 @@ public:
 		}
 	}
 
-	static distance_t Horizontal(const query_t *__restrict vector1, const data_t *__restrict vector2,
-	                                size_t num_dimensions) {
+	static distance_t Horizontal(const query_t *PDX_RESTRICT vector1, const data_t *PDX_RESTRICT vector2,
+	                             size_t num_dimensions) {
 		__m512 d2_vec = _mm512_setzero();
 		__m512 a_vec, b_vec;
 	simsimd_l2sq_f32_skylake_cycle:
@@ -72,7 +72,7 @@ public:
 	using data_t = pdx_data_t<U8>;
 
 	template <bool SKIP_PRUNED>
-	static void Vertical(const query_t *__restrict query, const data_t *__restrict data, size_t n_vectors,
+	static void Vertical(const query_t *PDX_RESTRICT query, const data_t *PDX_RESTRICT data, size_t n_vectors,
 	                     size_t total_vectors, size_t start_dimension, size_t end_dimension, distance_t *distances_p,
 	                     const uint32_t *pruning_positions = nullptr) {
 		__m512i res;
@@ -147,8 +147,8 @@ public:
 		}
 	}
 
-	static distance_t Horizontal(const query_t *__restrict vector1, const data_t *__restrict vector2,
-	                                size_t num_dimensions) {
+	static distance_t Horizontal(const query_t *PDX_RESTRICT vector1, const data_t *PDX_RESTRICT vector2,
+	                             size_t num_dimensions) {
 		__m512i d2_i32_vec = _mm512_setzero_si512();
 		__m512i a_u8_vec, b_u8_vec;
 

@@ -13,7 +13,7 @@ namespace PDX {
 /******************************************************************
  * ADSampling pruner
  ******************************************************************/
-template <Quantization q = F32>
+template <Quantization Q = F32>
 class ADSamplingPruner {
 
 public:
@@ -102,7 +102,7 @@ private:
 		int dim = static_cast<int>(num_dimensions);
 		int n_blas = static_cast<int>(n);
 		sgemm_(&trans_a, &trans_b, &dim, &n_blas, &dim, &alpha, matrix.data(), &dim, embeddings, &dim, &beta,
-		        out_buffer, &dim);
+		       out_buffer, &dim);
 	}
 };
 

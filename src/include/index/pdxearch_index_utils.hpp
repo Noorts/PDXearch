@@ -34,7 +34,6 @@ namespace duckdb {
 [[nodiscard]] inline unique_ptr<float[]> GenerateRandomRotationMatrix(const size_t num_dimensions, const int32_t seed) {
 	auto rotation_matrix = make_uniq_array<float>(num_dimensions * num_dimensions);
 
-	// TODO: Confirm seed handling is sound.
 	std::mt19937 gen(seed);
 	std::normal_distribution<float> normal_dist;
 
@@ -64,8 +63,8 @@ namespace duckdb {
 // See the README of the following for a description of the PDX layout:
 // https://github.com/cwida/pdx
 template <PDX::Quantization q, typename T>
-inline void StoreClusterEmbeddings(typename PDX::IndexPDXIVF<q>::cluster_t &cluster,
-                                   const PDX::IndexPDXIVF<q> &index, const T *embeddings, const size_t num_embeddings);
+inline void StoreClusterEmbeddings(typename PDX::IndexPDXIVF<q>::cluster_t &cluster, const PDX::IndexPDXIVF<q> &index,
+                                   const T *embeddings, const size_t num_embeddings);
 
 template <>
 inline void
