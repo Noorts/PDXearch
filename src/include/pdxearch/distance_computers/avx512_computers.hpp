@@ -13,13 +13,13 @@ class SIMDComputer {};
 template <>
 class SIMDComputer<DistanceMetric::L2SQ, Quantization::F32> {
 public:
-	using DISTANCE_TYPE = DistanceType_t<F32>;
-	using QUERY_TYPE = QuantizedEmbeddingType_t<F32>;
-	using DATA_TYPE = DataType_t<F32>;
+	using distance_t = pdx_distance_t<F32>;
+	using query_t = pdx_quantized_embedding_t<F32>;
+	using data_t = pdx_data_t<F32>;
 
 	template <bool SKIP_PRUNED>
-	static void Vertical(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t n_vectors,
-	                     size_t total_vectors, size_t start_dimension, size_t end_dimension, DISTANCE_TYPE *distances_p,
+	static void Vertical(const query_t *__restrict query, const data_t *__restrict data, size_t n_vectors,
+	                     size_t total_vectors, size_t start_dimension, size_t end_dimension, distance_t *distances_p,
 	                     const uint32_t *pruning_positions = nullptr) {
 		size_t dimensions_jump_factor = total_vectors;
 		for (size_t dimension_idx = start_dimension; dimension_idx < end_dimension; ++dimension_idx) {
@@ -29,13 +29,13 @@ public:
 				if constexpr (SKIP_PRUNED) {
 					true_vector_idx = pruning_positions[vector_idx];
 				}
-				DISTANCE_TYPE to_multiply = query[dimension_idx] - data[offset_to_dimension_start + true_vector_idx];
+				distance_t to_multiply = query[dimension_idx] - data[offset_to_dimension_start + true_vector_idx];
 				distances_p[true_vector_idx] += to_multiply * to_multiply;
 			}
 		}
 	}
 
-	static DISTANCE_TYPE Horizontal(const QUERY_TYPE *__restrict vector1, const DATA_TYPE *__restrict vector2,
+	static distance_t Horizontal(const query_t *__restrict vector1, const data_t *__restrict vector2,
 	                                size_t num_dimensions) {
 		__m512 d2_vec = _mm512_setzero();
 		__m512 a_vec, b_vec;
@@ -67,13 +67,13 @@ public:
 template <>
 class SIMDComputer<DistanceMetric::L2SQ, Quantization::U8> {
 public:
-	using DISTANCE_TYPE = DistanceType_t<U8>;
-	using QUERY_TYPE = QuantizedEmbeddingType_t<U8>;
-	using DATA_TYPE = DataType_t<U8>;
+	using distance_t = pdx_distance_t<U8>;
+	using query_t = pdx_quantized_embedding_t<U8>;
+	using data_t = pdx_data_t<U8>;
 
 	template <bool SKIP_PRUNED>
-	static void Vertical(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t n_vectors,
-	                     size_t total_vectors, size_t start_dimension, size_t end_dimension, DISTANCE_TYPE *distances_p,
+	static void Vertical(const query_t *__restrict query, const data_t *__restrict data, size_t n_vectors,
+	                     size_t total_vectors, size_t start_dimension, size_t end_dimension, distance_t *distances_p,
 	                     const uint32_t *pruning_positions = nullptr) {
 		__m512i res;
 		__m512i vec2_u8;
@@ -147,7 +147,7 @@ public:
 		}
 	}
 
-	static DISTANCE_TYPE Horizontal(const QUERY_TYPE *__restrict vector1, const DATA_TYPE *__restrict vector2,
+	static distance_t Horizontal(const query_t *__restrict vector1, const data_t *__restrict vector2,
 	                                size_t num_dimensions) {
 		__m512i d2_i32_vec = _mm512_setzero_si512();
 		__m512i a_u8_vec, b_u8_vec;

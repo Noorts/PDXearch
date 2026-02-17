@@ -66,7 +66,7 @@ struct DistanceType<F32> {
 	using type = float;
 };
 template <Quantization q>
-using DistanceType_t = typename DistanceType<q>::type;
+using pdx_distance_t = typename DistanceType<q>::type;
 
 // TODO: Do the same for indexes?
 template <Quantization q>
@@ -78,7 +78,7 @@ struct DataType<F32> {
 	using type = float;
 };
 template <Quantization q>
-using DataType_t = typename DataType<q>::type;
+using pdx_data_t = typename DataType<q>::type;
 
 template <Quantization q>
 struct QuantizedVectorType {
@@ -89,7 +89,7 @@ struct QuantizedVectorType<F32> {
 	using type = float;
 };
 template <Quantization q>
-using QuantizedEmbeddingType_t = typename QuantizedVectorType<q>::type;
+using pdx_quantized_embedding_t = typename QuantizedVectorType<q>::type;
 
 struct KNNCandidate {
 	uint32_t index;
@@ -104,7 +104,7 @@ struct VectorComparator {
 
 template <Quantization q>
 struct Cluster {
-	using data_t = DataType_t<q>;
+	using data_t = pdx_data_t<q>;
 
 	Cluster(uint32_t num_embeddings, uint32_t num_dimensions)
 	    : num_embeddings(num_embeddings), indices(new uint32_t[num_embeddings]),

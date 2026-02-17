@@ -15,11 +15,6 @@ namespace PDX {
  ******************************************************************/
 template <Quantization q = F32>
 class ADSamplingPruner {
-	using DISTANCES_TYPE = DistanceType_t<q>;
-	using VALUE_TYPE = DataType_t<q>;
-	using KNNCandidate_t = KNNCandidate;
-	using VectorComparator_t = VectorComparator;
-	using MatrixR = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
 public:
 	const uint32_t num_dimensions;
@@ -100,10 +95,31 @@ private:
 	 */
 	void Rotate(const float *PDX_RESTRICT const embeddings, float *PDX_RESTRICT const out_buffer,
 	            const size_t n) const {
-		Eigen::Map<const MatrixR> embeddings_matrix(embeddings, static_cast<Eigen::Index>(n),
-		                                            static_cast<Eigen::Index>(num_dimensions));
-		Eigen::Map<MatrixR> out(out_buffer, static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(num_dimensions));
-		out.noalias() = embeddings_matrix * matrix.transpose();
+		const char trans_a = 'T';
+		const char trans_b = 'N';
+		int m = static_cast<int>(num_dimensions);
+		int n_blas = static_cast<int>(n);
+		int k = static_cast<int>(num_dimensions);
+		float alpha = 1.0f;
+		float beta = 0.0f;
+		int lda = static_cast<int>(num_dimensions);
+		int ldb = static_cast<int>(num_dimensions);
+		int ldc = static_cast<int>(num_dimensions);
+		sgemm_(
+			&trans_a,
+			&trans_b,
+			&m,
+			&n_blas,
+			&k,
+			&alpha,
+			matrix.data(),
+			&lda,
+			embeddings,
+			&ldb,
+			&beta,
+			out_buffer,
+			&ldc
+		);
 	}
 };
 

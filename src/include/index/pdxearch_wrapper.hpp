@@ -182,7 +182,7 @@ public:
 		// Row-major buffer that the current cluster's embeddings are "gathered" into. This buffer is the source for
 		// StoreClusterEmbeddings, the result of which is persistently stored in the index. The buffer is reused across
 		// clusters. For F32: buffer is float. For U8: buffer is uint8_t (quantized).
-		using EmbeddingStorageType = PDX::DataType_t<Q>;
+		using EmbeddingStorageType = PDX::pdx_data_t<Q>;
 		size_t max_cluster_size = 0;
 		for (size_t i = 0; i < num_clusters_per_row_group; i++) {
 			max_cluster_size = std::max(max_cluster_size, kmeans_result.assignments[i].size());
@@ -331,7 +331,7 @@ public:
 		// Row-major buffer that the current cluster's embeddings are "gathered" into. This buffer is the source for
 		// StoreClusterEmbeddings, the result of which is persistently stored in the index. The buffer is reused across
 		// clusters. For F32: buffer is float. For U8: buffer is uint8_t (quantized).
-		using EmbeddingStorageType = PDX::DataType_t<Q>;
+		using EmbeddingStorageType = PDX::pdx_data_t<Q>;
 		size_t max_cluster_size = 0;
 		for (size_t i = 0; i < num_clusters; i++) {
 			max_cluster_size = std::max(max_cluster_size, kmeans_result.assignments[i].size());

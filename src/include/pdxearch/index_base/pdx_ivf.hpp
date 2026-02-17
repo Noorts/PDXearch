@@ -14,14 +14,14 @@ class IndexPDXIVF {};
 template <>
 class IndexPDXIVF<F32> {
 public:
-	using CLUSTER_TYPE = Cluster<F32>;
+	using cluster_t = Cluster<F32>;
 
 	const uint32_t num_dimensions {};
 	const uint64_t total_num_embeddings {};
 	const uint32_t num_clusters {};
 	const uint32_t num_vertical_dimensions {};
 	const uint32_t num_horizontal_dimensions {};
-	std::vector<CLUSTER_TYPE> clusters;
+	std::vector<cluster_t> clusters;
 	const bool is_normalized {};
 	std::vector<float> centroids;
 
@@ -37,14 +37,14 @@ public:
 template <>
 class IndexPDXIVF<U8> {
 public:
-	using CLUSTER_TYPE = Cluster<U8>;
+	using cluster_t = Cluster<U8>;
 
 	const uint32_t num_dimensions {};
 	const uint64_t total_num_embeddings {};
 	const uint32_t num_clusters {};
 	const uint32_t num_vertical_dimensions {};
 	const uint32_t num_horizontal_dimensions {};
-	std::vector<CLUSTER_TYPE> clusters;
+	std::vector<cluster_t> clusters;
 	const bool is_normalized {};
 	std::vector<float> centroids;
 

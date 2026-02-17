@@ -64,12 +64,12 @@ namespace duckdb {
 // See the README of the following for a description of the PDX layout:
 // https://github.com/cwida/pdx
 template <PDX::Quantization q, typename T>
-inline void StoreClusterEmbeddings(typename PDX::IndexPDXIVF<q>::CLUSTER_TYPE &cluster,
+inline void StoreClusterEmbeddings(typename PDX::IndexPDXIVF<q>::cluster_t &cluster,
                                    const PDX::IndexPDXIVF<q> &index, const T *embeddings, const size_t num_embeddings);
 
 template <>
 inline void
-StoreClusterEmbeddings<PDX::Quantization::F32, float>(PDX::IndexPDXIVF<PDX::Quantization::F32>::CLUSTER_TYPE &cluster,
+StoreClusterEmbeddings<PDX::Quantization::F32, float>(PDX::IndexPDXIVF<PDX::Quantization::F32>::cluster_t &cluster,
                                                       const PDX::IndexPDXIVF<PDX::Quantization::F32> &index,
                                                       const float *const embeddings, const size_t num_embeddings) {
 	// Store the cluster's data using the transposed PDX layout for float32 as described in:
@@ -99,7 +99,7 @@ StoreClusterEmbeddings<PDX::Quantization::F32, float>(PDX::IndexPDXIVF<PDX::Quan
 
 template <>
 inline void
-StoreClusterEmbeddings<PDX::Quantization::U8, uint8_t>(PDX::IndexPDXIVF<PDX::Quantization::U8>::CLUSTER_TYPE &cluster,
+StoreClusterEmbeddings<PDX::Quantization::U8, uint8_t>(PDX::IndexPDXIVF<PDX::Quantization::U8>::cluster_t &cluster,
                                                        const PDX::IndexPDXIVF<PDX::Quantization::U8> &index,
                                                        const uint8_t *const embeddings, const size_t num_embeddings) {
 	// Store the cluster's data using the transposed PDX layout for U8.
