@@ -5,6 +5,26 @@
 #include <cassert>
 #include <queue>
 
+#ifndef PDX_RESTRICT
+#if defined(__GNUC__) || defined(__clang__)
+#define PDX_RESTRICT __restrict__
+#elif defined(_MSC_VER)
+#define PDX_RESTRICT __restrict
+#elif defined(__INTEL_COMPILER)
+#define PDX_RESTRICT __restrict__
+#else
+#define PDX_RESTRICT
+#endif
+#endif
+
+#if defined(__GNUC__) || defined(__clang__)
+#define PDX_LIKELY(x) __builtin_expect(!!(x), 1)
+#define PDX_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define PDX_LIKELY(x) (x)
+#define PDX_UNLIKELY(x) (x)
+#endif
+
 namespace PDX {
 
 static constexpr float PROPORTION_HORIZONTAL_DIM = 0.75f;
@@ -29,7 +49,7 @@ enum Quantization { F32, U8, F16, BF };
 // TODO: Do the same for indexes?
 template <Quantization q>
 struct DistanceType {
-	using type = uint32_t; // default for U8, U6, U4
+	using type = uint32_t;
 };
 template <>
 struct DistanceType<F32> {
@@ -41,7 +61,7 @@ using DistanceType_t = typename DistanceType<q>::type;
 // TODO: Do the same for indexes?
 template <Quantization q>
 struct DataType {
-	using type = uint8_t; // default for U8, U6, U4
+	using type = uint8_t; // U8
 };
 template <>
 struct DataType<F32> {
@@ -52,7 +72,7 @@ using DataType_t = typename DataType<q>::type;
 
 template <Quantization q>
 struct QuantizedVectorType {
-	using type = uint8_t; // default for U8, U6, U4
+	using type = uint8_t; // U8
 };
 template <>
 struct QuantizedVectorType<F32> {
@@ -75,7 +95,17 @@ struct VectorComparator {
 };
 
 template <Quantization q>
-struct Cluster { // default for U8, U6, U4
+struct Cluster { // default for U8
+	Cluster(uint32_t num_embeddings, uint32_t num_dimensions)
+	    : num_embeddings(num_embeddings), indices(new uint32_t[num_embeddings]),
+	      data(new uint8_t[static_cast<uint64_t>(num_embeddings) * num_dimensions]) {
+	}
+
+	~Cluster() {
+		delete[] data;
+		delete[] indices;
+	}
+
 	uint32_t num_embeddings {};
 	uint32_t *indices = nullptr;
 	uint8_t *data = nullptr;

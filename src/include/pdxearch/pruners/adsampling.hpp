@@ -8,18 +8,6 @@
 #include <fftw3.h>
 #endif
 
-#ifndef SKM_RESTRICT
-#if defined(__GNUC__) || defined(__clang__)
-#define SKM_RESTRICT __restrict__
-#elif defined(_MSC_VER)
-#define SKM_RESTRICT __restrict
-#elif defined(__INTEL_COMPILER)
-#define SKM_RESTRICT __restrict__
-#else
-#define SKM_RESTRICT
-#endif
-#endif
-
 namespace PDX {
 
 /******************************************************************
@@ -29,8 +17,8 @@ template <Quantization q = F32>
 class ADSamplingPruner {
 	using DISTANCES_TYPE = DistanceType_t<q>;
 	using VALUE_TYPE = DataType_t<q>;
-	using KNNCandidate_t = KNNCandidate<q>;
-	using VectorComparator_t = VectorComparator<q>;
+	using KNNCandidate_t = KNNCandidate<F32>;
+	using VectorComparator_t = VectorComparator<F32>;
 	using MatrixR = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
 public:
@@ -66,23 +54,21 @@ public:
 		ADSamplingPruner::matrix = matrix;
 	}
 
-	template <Quantization Q = q>
-	DistanceType_t<Q>
-	GetPruningThreshold(uint32_t,
-	                    std::priority_queue<KNNCandidate<Q>, std::vector<KNNCandidate<Q>>, VectorComparator<Q>> &heap,
-	                    const uint32_t current_dimension_idx) const {
+	float GetPruningThreshold(
+	    uint32_t,
+	    std::priority_queue<KNNCandidate<F32>, std::vector<KNNCandidate<F32>>, VectorComparator<F32>> &heap,
+	    const uint32_t current_dimension_idx) const {
 		float ratio = current_dimension_idx == num_dimensions ? 1 : ratios[current_dimension_idx];
-		// return std::numeric_limits<DistanceType_t<Q>>::max();
 		return heap.top().distance * ratio;
 	}
 
-	void PreprocessQuery(const float *SKM_RESTRICT const raw_query_embedding,
-	                     float *SKM_RESTRICT const output_query_embedding) const {
+	void PreprocessQuery(const float *PDX_RESTRICT const raw_query_embedding,
+	                     float *PDX_RESTRICT const output_query_embedding) const {
 		PreprocessEmbeddings(raw_query_embedding, output_query_embedding, 1);
 	}
 
-	void PreprocessEmbeddings(const float *SKM_RESTRICT const input_embeddings,
-	                          float *SKM_RESTRICT const output_embeddings, const size_t num_embeddings) const {
+	void PreprocessEmbeddings(const float *PDX_RESTRICT const input_embeddings,
+	                          float *PDX_RESTRICT const output_embeddings, const size_t num_embeddings) const {
 		Rotate(input_embeddings, output_embeddings, num_embeddings);
 	}
 
@@ -109,14 +95,11 @@ private:
 	 * Transforms embeddings to a rotated space where dimensions contribute more equally
 	 * to the total distance, enabling effective early termination.
 	 *
-	 * For DCT path: applies sign flipping followed by DCT-II transform.
-	 * For matrix path: computes out = embeddings * matrix^T.
-	 *
 	 * @param embeddings Input embeddings (row-major, n × num_dimensions)
 	 * @param out_buffer Output buffer for rotated embeddings (n × num_dimensions)
 	 * @param n Number of embeddings to rotate
 	 */
-	void Rotate(const VALUE_TYPE *SKM_RESTRICT const embeddings, VALUE_TYPE *SKM_RESTRICT const out_buffer,
+	void Rotate(const float *PDX_RESTRICT const embeddings, float *PDX_RESTRICT const out_buffer,
 	            const size_t n) const {
 		Eigen::Map<const MatrixR> embeddings_matrix(embeddings, n, num_dimensions);
 		Eigen::Map<MatrixR> out(out_buffer, n, num_dimensions);

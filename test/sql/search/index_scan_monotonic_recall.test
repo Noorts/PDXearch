@@ -25,6 +25,8 @@ CREATE OR REPLACE TABLE t1 (id INTEGER, emb FLOAT[${DIMS}]);
 statement ok
 INSERT INTO t1 FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') LIMIT ${NUM_ROWS};
 
+foreach quantization f32 u8
+
 foreach metric_name,distance_func l2sq,array_distance cosine,array_cosine_distance ip,array_negative_inner_product
 
 statement ok
@@ -34,7 +36,7 @@ statement ok
 DROP INDEX IF EXISTS t1_idx;
 
 statement ok
-CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (metric = '${metric_name}', seed = ${INDEX_SEED});
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (metric = '${metric_name}', quantization = '${quantization}', seed = ${INDEX_SEED});
 
 statement ok
 CREATE OR REPLACE TABLE results (n_probe INTEGER, recall FLOAT);
@@ -89,5 +91,7 @@ query I
 SELECT 0.90 <= (SELECT recall FROM results WHERE n_probe = 0);
 ----
 true
+
+endloop
 
 endloop

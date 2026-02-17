@@ -116,15 +116,28 @@ public:
 	 ******************************************************************/
 
 	idx_t GetNumClustersPerRowGroup() const {
+		if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+			return static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())->GetNumClustersPerRowGroup();
+		}
 		return static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())->GetNumClustersPerRowGroup();
 	}
 
 	idx_t GetNumRowGroups() const {
+		if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+			return static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())->GetNumRowGroups();
+		}
 		return static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())->GetNumRowGroups();
 	}
 
 	idx_t GetNumClusters() const {
+		if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+			return static_cast<PDXearchWrapperGlobalU8 *>(pdxearch_wrapper.get())->GetNumClusters();
+		}
 		return static_cast<PDXearchWrapperGlobalF32 *>(pdxearch_wrapper.get())->GetNumClusters();
+	}
+
+	PDX::Quantization GetQuantization() const {
+		return pdxearch_wrapper->GetQuantization();
 	}
 
 	idx_t GetNumDimensions() const {

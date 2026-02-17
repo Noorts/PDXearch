@@ -68,6 +68,9 @@ PDXearchIndex::PDXearchIndex(const string &name, IndexConstraintType index_const
 		pdxearch_wrapper =
 		    make_uniq<PDXearchWrapperGlobalF32>(dist_metric, num_dimensions, n_probe, seed, estimated_cardinality);
 #endif
+	} else if (quantization == PDX::Quantization::U8) {
+		pdxearch_wrapper =
+		    make_uniq<PDXearchWrapperU8>(dist_metric, num_dimensions, n_probe, seed, estimated_cardinality);
 	} else {
 		throw InternalException("Unsupported quantization: %s", quantization);
 	}
@@ -81,33 +84,58 @@ PDXearchIndex::PDXearchIndex(const string &name, IndexConstraintType index_const
 
 void PDXearchIndex::SetUpIndexForRowGroup(const row_t *const row_ids, const float *const vectors,
                                           const idx_t num_vectors, const idx_t row_group_id) {
-	static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
-	    ->SetUpIndexForRowGroup(row_ids, vectors, num_vectors, row_group_id);
+	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())
+		    ->SetUpIndexForRowGroup(row_ids, vectors, num_vectors, row_group_id);
+	} else {
+		static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
+		    ->SetUpIndexForRowGroup(row_ids, vectors, num_vectors, row_group_id);
+	}
 }
 
 void PDXearchIndex::InitializeSearchForRowGroup(float *const preprocessed_query, const idx_t limit,
                                                 const idx_t row_group_id, PDX::Heap<PDX::F32> &heap,
                                                 std::mutex &heap_mutex) {
-	static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
-	    ->InitializeSearchForRowGroup(preprocessed_query, limit, row_group_id, heap, heap_mutex);
+	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())
+		    ->InitializeSearchForRowGroup(preprocessed_query, limit, row_group_id, heap, heap_mutex);
+	} else {
+		static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
+		    ->InitializeSearchForRowGroup(preprocessed_query, limit, row_group_id, heap, heap_mutex);
+	}
 }
 
 void PDXearchIndex::SearchRowGroup(const idx_t row_group_id, const idx_t num_clusters_to_probe) {
-	static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())->SearchRowGroup(row_group_id, num_clusters_to_probe);
+	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())->SearchRowGroup(row_group_id, num_clusters_to_probe);
+	} else {
+		static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())->SearchRowGroup(row_group_id, num_clusters_to_probe);
+	}
 }
 
 void PDXearchIndex::InitializeFilteredSearchForRowGroup(float *const preprocessed_query, const idx_t limit,
                                                         const std::vector<row_t> &passing_row_ids,
                                                         const idx_t row_group_id, PDX::Heap<PDX::F32> &heap,
                                                         std::mutex &heap_mutex) {
-	static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
-	    ->InitializeFilteredSearchForRowGroup(preprocessed_query, limit, passing_row_ids, row_group_id, heap,
-	                                          heap_mutex);
+	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())
+		    ->InitializeFilteredSearchForRowGroup(preprocessed_query, limit, passing_row_ids, row_group_id, heap,
+		                                          heap_mutex);
+	} else {
+		static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
+		    ->InitializeFilteredSearchForRowGroup(preprocessed_query, limit, passing_row_ids, row_group_id, heap,
+		                                          heap_mutex);
+	}
 }
 
 void PDXearchIndex::FilteredSearchRowGroup(const idx_t row_group_id, const idx_t num_clusters_to_probe) {
-	static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
-	    ->FilteredSearchRowGroup(row_group_id, num_clusters_to_probe);
+	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())
+		    ->FilteredSearchRowGroup(row_group_id, num_clusters_to_probe);
+	} else {
+		static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
+		    ->FilteredSearchRowGroup(row_group_id, num_clusters_to_probe);
+	}
 }
 
 /******************************************************************
@@ -116,8 +144,13 @@ void PDXearchIndex::FilteredSearchRowGroup(const idx_t row_group_id, const idx_t
 
 void PDXearchIndex::SetUpGlobalIndex(const row_t *const row_ids, const float *const embeddings,
                                      const idx_t num_embeddings) {
-	static_cast<PDXearchWrapperGlobalF32 *>(pdxearch_wrapper.get())
-	    ->SetUpGlobalIndex(row_ids, embeddings, num_embeddings);
+	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+		static_cast<PDXearchWrapperGlobalU8 *>(pdxearch_wrapper.get())
+		    ->SetUpGlobalIndex(row_ids, embeddings, num_embeddings);
+	} else {
+		static_cast<PDXearchWrapperGlobalF32 *>(pdxearch_wrapper.get())
+		    ->SetUpGlobalIndex(row_ids, embeddings, num_embeddings);
+	}
 }
 
 struct PDXearchIndexScanState : public IndexScanState {
@@ -130,8 +163,13 @@ unique_ptr<IndexScanState> PDXearchIndex::InitializeGlobalScan(const float *cons
 	auto state = make_uniq<PDXearchIndexScanState>();
 
 	const auto n_probe = GetEffectiveNProbe(context);
-	state->row_ids =
-	    static_cast<PDXearchWrapperGlobalF32 *>(pdxearch_wrapper.get())->Search(query_embedding, limit, n_probe);
+	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+		state->row_ids =
+		    static_cast<PDXearchWrapperGlobalU8 *>(pdxearch_wrapper.get())->Search(query_embedding, limit, n_probe);
+	} else {
+		state->row_ids =
+		    static_cast<PDXearchWrapperGlobalF32 *>(pdxearch_wrapper.get())->Search(query_embedding, limit, n_probe);
+	}
 
 	return std::move(state);
 }
@@ -156,6 +194,10 @@ PDXearchIndex::GlobalFilteredSearch(const float *const query_embedding, const id
                                     std::vector<std::pair<Vector, idx_t>> &collected_embeddings,
                                     const ClientContext &context) {
 	const auto n_probe = GetEffectiveNProbe(context);
+	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+		return static_cast<PDXearchWrapperGlobalU8 *>(pdxearch_wrapper.get())
+		    ->FilteredSearch(query_embedding, limit, collected_embeddings, n_probe);
+	}
 	return static_cast<PDXearchWrapperGlobalF32 *>(pdxearch_wrapper.get())
 	    ->FilteredSearch(query_embedding, limit, collected_embeddings, n_probe);
 }
@@ -308,6 +350,7 @@ const case_insensitive_map_t<PDX::DistanceMetric> PDXearchIndex::DISTANCE_METRIC
 
 const case_insensitive_map_t<PDX::Quantization> PDXearchIndex::QUANTIZATION_MAP = {
     {"f32", PDX::Quantization::F32},
+    {"u8", PDX::Quantization::U8},
 };
 
 unique_ptr<ExpressionMatcher> PDXearchIndex::MakeFunctionMatcher(const PDXearchWrapper &pdxearch_wrapper) {

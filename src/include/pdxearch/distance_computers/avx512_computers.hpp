@@ -22,7 +22,7 @@ public:
 	template <bool SKIP_PRUNED>
 	static void Vertical(const QUERY_TYPE *__restrict query, const DATA_TYPE *__restrict data, size_t n_vectors,
 	                     size_t total_vectors, size_t start_dimension, size_t end_dimension, DISTANCE_TYPE *distances_p,
-	                     const uint32_t *pruning_positions = nullptr, const int32_t *dim_clip_value = nullptr) {
+	                     const uint32_t *pruning_positions = nullptr) {
 		size_t dimensions_jump_factor = total_vectors;
 		for (size_t dimension_idx = start_dimension; dimension_idx < end_dimension; ++dimension_idx) {
 			size_t offset_to_dimension_start = dimension_idx * dimensions_jump_factor;
@@ -38,7 +38,7 @@ public:
 	}
 
 	static DISTANCE_TYPE Horizontal(const QUERY_TYPE *__restrict vector1, const DATA_TYPE *__restrict vector2,
-	                                size_t num_dimensions, const float *scaling_factors = nullptr) {
+	                                size_t num_dimensions) {
 		__m512 d2_vec = _mm512_setzero();
 		__m512 a_vec, b_vec;
 	simsimd_l2sq_f32_skylake_cycle:

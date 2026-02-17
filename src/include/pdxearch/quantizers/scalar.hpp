@@ -33,22 +33,22 @@ public:
 };
 
 template <Quantization q = U8>
-class Global8Quantizer : public Quantizer {
+class ScalarQuantizer : public Quantizer {
 public:
-	using QUANTIZED_QUERY_TYPE = QuantizedVectorType_t<q>;
+	using quantized_query_t = QuantizedVectorType_t<q>;
 
-	explicit Global8Quantizer(size_t num_dimensions) : Quantizer(num_dimensions) {
+	explicit ScalarQuantizer(size_t num_dimensions) : Quantizer(num_dimensions) {
 	}
 
 	uint8_t MAX_VALUE = 255;
 
-	void PrepareQuery(const float *query, const float for_base, const float scale_factor, int32_t *dim_clip_value,
-	                  QUANTIZED_QUERY_TYPE *quantized_query) {
+	void PrepareQuery(const float *query, const float quantization_base, const float quantization_scale,
+		quantized_query_t *quantized_query) {
 		for (size_t i = 0; i < num_dimensions; ++i) {
-			// Scale factor is global in symmetric kernel
-			int rounded = static_cast<int>(std::round((query[i] - for_base) * scale_factor));
-			dim_clip_value[i] = rounded;
-			if (rounded > MAX_VALUE || rounded < 0) {
+			int rounded = static_cast<int>(std::round((query[i] - quantization_base) * quantization_scale));
+			if (PDX_UNLIKELY(rounded > MAX_VALUE)) {
+				quantized_query[i] = MAX_VALUE;
+			} else if (PDX_UNLIKELY(rounded < 0)) {
 				quantized_query[i] = 0;
 			} else {
 				quantized_query[i] = static_cast<uint8_t>(rounded);
