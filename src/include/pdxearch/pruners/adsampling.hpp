@@ -17,8 +17,8 @@ template <Quantization q = F32>
 class ADSamplingPruner {
 	using DISTANCES_TYPE = DistanceType_t<q>;
 	using VALUE_TYPE = DataType_t<q>;
-	using KNNCandidate_t = KNNCandidate<F32>;
-	using VectorComparator_t = VectorComparator<F32>;
+	using KNNCandidate_t = KNNCandidate;
+	using VectorComparator_t = VectorComparator;
 	using MatrixR = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
 public:
@@ -56,7 +56,7 @@ public:
 
 	float GetPruningThreshold(
 	    uint32_t,
-	    std::priority_queue<KNNCandidate<F32>, std::vector<KNNCandidate<F32>>, VectorComparator<F32>> &heap,
+	    std::priority_queue<KNNCandidate, std::vector<KNNCandidate>, VectorComparator> &heap,
 	    const uint32_t current_dimension_idx) const {
 		float ratio = current_dimension_idx == num_dimensions ? 1 : ratios[current_dimension_idx];
 		return heap.top().distance * ratio;

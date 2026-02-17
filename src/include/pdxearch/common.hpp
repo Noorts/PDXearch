@@ -81,24 +81,24 @@ struct QuantizedVectorType<F32> {
 template <Quantization q>
 using QuantizedVectorType_t = typename QuantizedVectorType<q>::type;
 
-template <PDX::Quantization q>
 struct KNNCandidate {
 	uint32_t index;
 	float distance;
 };
 
-template <PDX::Quantization q>
 struct VectorComparator {
-	bool operator()(const KNNCandidate<q> &a, const KNNCandidate<q> &b) {
+	bool operator()(const KNNCandidate &a, const KNNCandidate &b) {
 		return a.distance < b.distance;
 	}
 };
 
 template <Quantization q>
-struct Cluster { // default for U8
+struct Cluster {
+	using data_t = DataType_t<q>;
+
 	Cluster(uint32_t num_embeddings, uint32_t num_dimensions)
 	    : num_embeddings(num_embeddings), indices(new uint32_t[num_embeddings]),
-	      data(new uint8_t[static_cast<uint64_t>(num_embeddings) * num_dimensions]) {
+	      data(new data_t[static_cast<uint64_t>(num_embeddings) * num_dimensions]) {
 	}
 
 	~Cluster() {
@@ -108,28 +108,10 @@ struct Cluster { // default for U8
 
 	uint32_t num_embeddings {};
 	uint32_t *indices = nullptr;
-	uint8_t *data = nullptr;
+	data_t *data = nullptr;
 };
 
-template <>
-struct Cluster<F32> {
-	Cluster(uint32_t num_embeddings, uint32_t num_dimensions)
-	    : num_embeddings(num_embeddings), indices(new uint32_t[num_embeddings]),
-	      data(new float[static_cast<uint64_t>(num_embeddings * num_dimensions)]) {
-	}
-
-	~Cluster() {
-		delete[] data;
-		delete[] indices;
-	}
-
-	uint32_t num_embeddings {};
-	uint32_t *indices = nullptr;
-	float *data = nullptr;
-};
-
-template <Quantization q>
-using Heap = typename std::priority_queue<KNNCandidate<q>, std::vector<KNNCandidate<q>>, VectorComparator<q>>;
+using Heap = std::priority_queue<KNNCandidate, std::vector<KNNCandidate>, VectorComparator>;
 
 struct PDXDimensionSplit {
 	const uint32_t horizontal_dimensions;

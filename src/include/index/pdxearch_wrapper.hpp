@@ -157,22 +157,13 @@ public:
 		// TODO(@lkuffo): See issue #38. num_embeddings < DEFAULT_N_CLUSTERS_PER_ROW_GROUP is currently not handled.
 		D_ASSERT(num_embeddings >= num_clusters_per_row_group);
 
-		// Compute quantization parameters for U8 from the embeddings' value range.
 		float quantization_base = 0.0f;
 		float quantization_scale = 1.0f;
 		if constexpr (Q == PDX::U8) {
-			float global_min = std::numeric_limits<float>::max();
-			float global_max = std::numeric_limits<float>::lowest();
-			for (idx_t i = 0; i < static_cast<idx_t>(num_embeddings) * num_dimensions; ++i) {
-				global_min = std::min(global_min, embeddings[i]);
-				global_max = std::max(global_max, embeddings[i]);
-			}
-			quantization_base = global_min;
-			float range = global_max - global_min;
-			quantization_scale = (range > 0) ? 255.0f / range : 1.0f;
-		}
-
-		if constexpr (Q == PDX::U8) {
+			const auto params = PDX::ScalarQuantizer<Q>::ComputeQuantizationParams(
+			    embeddings, static_cast<size_t>(num_embeddings) * num_dimensions);
+			quantization_base = params.quantization_base;
+			quantization_scale = params.quantization_scale;
 			row_group.index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings,
 			                                                  num_clusters_per_row_group, IsNormalized(),
 			                                                  quantization_scale, quantization_base);
@@ -214,13 +205,10 @@ public:
 				cluster.indices[position_in_cluster] = row_id;
 
 				if constexpr (Q == PDX::U8) {
-					// Quantize float embedding to uint8.
-					for (size_t d = 0; d < num_dimensions; d++) {
-						float val = embeddings[embedding_idx * num_dimensions + d];
-						int rounded = static_cast<int>(std::round((val - quantization_base) * quantization_scale));
-						tmp_cluster_embeddings[position_in_cluster * num_dimensions + d] =
-						    static_cast<uint8_t>(std::clamp(rounded, 0, 255));
-					}
+					PDX::ScalarQuantizer<Q> quantizer(num_dimensions);
+					quantizer.QuantizeVector(embeddings + (embedding_idx * num_dimensions), quantization_base,
+					                         quantization_scale,
+					                         tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions));
 				} else {
 					memcpy(tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions),
 					       embeddings + (embedding_idx * num_dimensions), num_dimensions * sizeof(float));
@@ -236,7 +224,7 @@ public:
 	}
 
 	void InitializeSearchForRowGroup(float *const preprocessed_query_embedding, const idx_t limit,
-	                                 const idx_t row_group_id, PDX::Heap<PDX::F32> &heap, std::mutex &heap_mutex) {
+	                                 const idx_t row_group_id, PDX::Heap &heap, std::mutex &heap_mutex) {
 		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
 		row_group.searcher->InitializeSearch(preprocessed_query_embedding, limit, heap, heap_mutex);
 	}
@@ -248,7 +236,7 @@ public:
 
 	void InitializeFilteredSearchForRowGroup(float *const preprocessed_query_embedding, const idx_t limit,
 	                                         const std::vector<row_t> &passing_row_ids, const idx_t row_group_id,
-	                                         PDX::Heap<PDX::F32> &heap, std::mutex &heap_mutex) {
+	                                         PDX::Heap &heap, std::mutex &heap_mutex) {
 		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
 
 		std::unique_ptr<PDX::PredicateEvaluator> predicate_evaluator =
@@ -321,22 +309,13 @@ public:
 
 		const auto num_dimensions = GetNumDimensions();
 
-		// Compute quantization parameters for U8 from the embeddings' value range.
 		float quantization_base = 0.0f;
 		float quantization_scale = 1.0f;
 		if constexpr (Q == PDX::U8) {
-			float global_min = std::numeric_limits<float>::max();
-			float global_max = std::numeric_limits<float>::lowest();
-			for (idx_t i = 0; i < static_cast<idx_t>(num_embeddings) * num_dimensions; ++i) {
-				global_min = std::min(global_min, embeddings[i]);
-				global_max = std::max(global_max, embeddings[i]);
-			}
-			quantization_base = global_min;
-			float range = global_max - global_min;
-			quantization_scale = (range > 0) ? 255.0f / range : 1.0f;
-		}
-
-		if constexpr (Q == PDX::U8) {
+			const auto params = PDX::ScalarQuantizer<Q>::ComputeQuantizationParams(
+			    embeddings, static_cast<size_t>(num_embeddings) * num_dimensions);
+			quantization_base = params.quantization_base;
+			quantization_scale = params.quantization_scale;
 			index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters, IsNormalized(),
 			                                        quantization_scale, quantization_base);
 		} else {
@@ -376,13 +355,10 @@ public:
 				cluster.indices[position_in_cluster] = row_id;
 
 				if constexpr (Q == PDX::U8) {
-					// Quantize float embedding to uint8.
-					for (size_t d = 0; d < num_dimensions; d++) {
-						float val = embeddings[embedding_idx * num_dimensions + d];
-						int rounded = static_cast<int>(std::round((val - quantization_base) * quantization_scale));
-						tmp_cluster_embeddings[position_in_cluster * num_dimensions + d] =
-						    static_cast<uint8_t>(std::clamp(rounded, 0, 255));
-					}
+					PDX::ScalarQuantizer<Q> quantizer(num_dimensions);
+					quantizer.QuantizeVector(embeddings + (embedding_idx * num_dimensions), quantization_base,
+					                         quantization_scale,
+					                         tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions));
 				} else {
 					memcpy(tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions),
 					       embeddings + (embedding_idx * num_dimensions), num_dimensions * sizeof(float));
@@ -399,7 +375,7 @@ public:
 	std::unique_ptr<std::vector<row_t>> Search(const float *const query_embedding, const idx_t limit,
 	                                           const uint32_t n_probe) const {
 		searcher->SetNProbe(n_probe);
-		const std::vector<PDX::KNNCandidate<PDX::F32>> results = searcher->SearchGlobal(query_embedding, limit);
+		const std::vector<PDX::KNNCandidate> results = searcher->SearchGlobal(query_embedding, limit);
 		std::unique_ptr<std::vector<row_t>> row_ids = make_uniq<std::vector<row_t>>(results.size());
 		for (size_t i = 0; i < results.size(); i++) {
 			(*row_ids)[i] = results[i].index;
@@ -435,7 +411,7 @@ public:
 		const PDX::PredicateEvaluator predicate_evaluator = CreatePredicateEvaluator(row_id_vectors);
 
 		searcher->SetNProbe(n_probe);
-		std::vector<PDX::KNNCandidate<PDX::F32>> results =
+		std::vector<PDX::KNNCandidate> results =
 		    searcher->FilteredSearchGlobal(query_embedding, limit, predicate_evaluator);
 		std::unique_ptr<std::vector<row_t>> row_ids = make_uniq<std::vector<row_t>>(results.size());
 		for (size_t i = 0; i < results.size(); i++) {

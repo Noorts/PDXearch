@@ -83,11 +83,10 @@ StoreClusterEmbeddings<PDX::Quantization::F32, float>(PDX::IndexPDXIVF<PDX::Quan
 	}
 
 	// Horizontal dimensions decomposed every 64 dimensions.
-	constexpr size_t HORIZONTAL_SUBVECTOR_LENGTH = 64;
 	size_t current_horizontal_offset = index.num_vertical_dimensions * num_embeddings;
 
-	for (size_t dim_group = 0; dim_group < index.num_horizontal_dimensions; dim_group += HORIZONTAL_SUBVECTOR_LENGTH) {
-		size_t group_size = std::min(HORIZONTAL_SUBVECTOR_LENGTH, index.num_horizontal_dimensions - dim_group);
+	for (size_t dim_group = 0; dim_group < index.num_horizontal_dimensions; dim_group += PDX::H_DIM_SIZE) {
+		size_t group_size = std::min(PDX::H_DIM_SIZE, index.num_horizontal_dimensions - dim_group);
 		size_t actual_dim = index.num_vertical_dimensions + dim_group;
 
 		for (size_t embedding = 0; embedding < num_embeddings; embedding++) {
@@ -118,12 +117,11 @@ inline void StoreClusterEmbeddings<PDX::Quantization::U8, uint8_t>(
 	}
 
 	// Horizontal dimensions decomposed every 64 dimensions (same layout as F32, with uint8_t).
-	constexpr size_t HORIZONTAL_SUBVECTOR_LENGTH = 64;
 	size_t current_horizontal_offset = index.num_vertical_dimensions * num_embeddings;
 
-	for (size_t dim_group = 0; dim_group < index.num_horizontal_dimensions; dim_group += HORIZONTAL_SUBVECTOR_LENGTH) {
+	for (size_t dim_group = 0; dim_group < index.num_horizontal_dimensions; dim_group += PDX::H_DIM_SIZE) {
 		size_t group_size =
-		    std::min(HORIZONTAL_SUBVECTOR_LENGTH, static_cast<size_t>(index.num_horizontal_dimensions) - dim_group);
+		    std::min(PDX::H_DIM_SIZE, static_cast<size_t>(index.num_horizontal_dimensions) - dim_group);
 		size_t actual_dim = index.num_vertical_dimensions + dim_group;
 
 		for (size_t embedding = 0; embedding < num_embeddings; embedding++) {

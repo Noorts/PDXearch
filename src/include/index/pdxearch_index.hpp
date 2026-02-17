@@ -39,13 +39,13 @@ public:
 	void SetUpIndexForRowGroup(const row_t *row_ids, const float *embeddings, idx_t num_embeddings, idx_t row_group_id);
 
 	void InitializeSearchForRowGroup(float *preprocessed_query_embedding, idx_t limit, idx_t row_group_id,
-	                                 PDX::Heap<PDX::F32> &heap, std::mutex &heap_mutex);
+	                                 PDX::Heap &heap, std::mutex &heap_mutex);
 
 	void SearchRowGroup(idx_t row_group_id, idx_t num_clusters_to_probe);
 
 	void InitializeFilteredSearchForRowGroup(float *preprocessed_query_embedding, idx_t limit,
 	                                         const std::vector<row_t> &passing_row_ids, idx_t row_group_id,
-	                                         PDX::Heap<PDX::F32> &heap, std::mutex &heap_mutex);
+	                                         PDX::Heap &heap, std::mutex &heap_mutex);
 
 	void FilteredSearchRowGroup(idx_t row_group_id, idx_t num_clusters_to_probe);
 

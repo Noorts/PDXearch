@@ -2,9 +2,16 @@
 
 #include <cstdint>
 #include <cmath>
+#include <algorithm>
+#include <limits>
 #include "pdxearch/common.hpp"
 
 namespace PDX {
+
+struct ScalarQuantizationParams {
+	float quantization_base;
+	float quantization_scale;
+};
 
 class Quantizer {
 
@@ -35,26 +42,37 @@ public:
 template <Quantization q = U8>
 class ScalarQuantizer : public Quantizer {
 public:
-	using quantized_query_t = QuantizedVectorType_t<q>;
+	using quantized_vector_t = QuantizedVectorType_t<q>;
 
 	explicit ScalarQuantizer(size_t num_dimensions) : Quantizer(num_dimensions) {
 	}
 
-	uint8_t MAX_VALUE = 255;
+	static constexpr uint8_t MAX_VALUE = 255;
 
-	void PrepareQuery(const float *query, const float quantization_base, const float quantization_scale,
-		quantized_query_t *quantized_query) {
+	static ScalarQuantizationParams ComputeQuantizationParams(const float *embeddings, size_t total_elements) {
+		float global_min = std::numeric_limits<float>::max();
+		float global_max = std::numeric_limits<float>::lowest();
+		for (size_t i = 0; i < total_elements; ++i) {
+			global_min = std::min(global_min, embeddings[i]);
+			global_max = std::max(global_max, embeddings[i]);
+		}
+		float range = global_max - global_min;
+		return {global_min, (range > 0) ? 255.0f / range : 1.0f};
+	}
+
+	void QuantizeVector(const float *input, const float quantization_base, const float quantization_scale,
+	                    quantized_vector_t *output) {
 		for (size_t i = 0; i < num_dimensions; ++i) {
-			int rounded = static_cast<int>(std::round((query[i] - quantization_base) * quantization_scale));
+			int rounded = static_cast<int>(std::round((input[i] - quantization_base) * quantization_scale));
 			if (PDX_UNLIKELY(rounded > MAX_VALUE)) {
-				quantized_query[i] = MAX_VALUE;
+				output[i] = MAX_VALUE;
 			} else if (PDX_UNLIKELY(rounded < 0)) {
-				quantized_query[i] = 0;
+				output[i] = 0;
 			} else {
-				quantized_query[i] = static_cast<uint8_t>(rounded);
+				output[i] = static_cast<uint8_t>(rounded);
 			}
 		}
-	};
+	}
 };
 
 } // namespace PDX
