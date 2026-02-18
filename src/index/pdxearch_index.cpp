@@ -132,13 +132,13 @@ void PDXearchIndex::InitializeFilteredSearchForRowGroup(float *const preprocesse
 	}
 }
 
-void PDXearchIndex::FilteredSearchRowGroup(const idx_t row_group_id, const idx_t num_clusters_to_probe) {
+void PDXearchIndex::FilteredSearchRowGroup(const idx_t row_group_id, const idx_t num_clusters_to_try_to_probe) {
 	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
 		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())
-		    ->FilteredSearchRowGroup(row_group_id, num_clusters_to_probe);
+		    ->FilteredSearchRowGroup(row_group_id, num_clusters_to_try_to_probe);
 	} else {
 		static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
-		    ->FilteredSearchRowGroup(row_group_id, num_clusters_to_probe);
+		    ->FilteredSearchRowGroup(row_group_id, num_clusters_to_try_to_probe);
 	}
 }
 

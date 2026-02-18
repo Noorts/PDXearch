@@ -369,7 +369,9 @@ public:
 		}
 	}
 
-	void FilteredSearch(const size_t num_clusters_to_probe) {
+	// Tries to probe the next few clusters. Class state tracks which clusters have already been probed. Stops probing
+	// once all clusters have been probed.
+	void FilteredSearch(const size_t num_clusters_to_try_to_probe) {
 		// Partial precondition check to ensure the state was reset / initialized.
 		assert(best_k);
 		assert(best_k_mutex);
@@ -380,8 +382,8 @@ public:
 		std::unique_ptr<distance_t[]> pruning_distances(new distance_t[max_cluster_size]);
 		std::unique_ptr<uint32_t[]> pruning_positions(new uint32_t[max_cluster_size]);
 
-		const size_t end_idx =
-		    std::min<size_t>(cluster_indices_in_access_order_offset + num_clusters_to_probe, pdx_data.num_clusters);
+		const size_t end_idx = std::min<size_t>(cluster_indices_in_access_order_offset + num_clusters_to_try_to_probe,
+		                                        pdx_data.num_clusters);
 		for (; cluster_indices_in_access_order_offset < end_idx; ++cluster_indices_in_access_order_offset) {
 			distance_t pruning_threshold = std::numeric_limits<distance_t>::max();
 			uint32_t current_dimension_idx = 0;

@@ -246,9 +246,9 @@ public:
 		                                     std::move(predicate_evaluator));
 	}
 
-	void FilteredSearchRowGroup(const idx_t row_group_id, const idx_t num_clusters_to_probe) {
+	void FilteredSearchRowGroup(const idx_t row_group_id, const idx_t num_clusters_to_try_to_probe) {
 		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
-		row_group.searcher->FilteredSearch(num_clusters_to_probe);
+		row_group.searcher->FilteredSearch(num_clusters_to_try_to_probe);
 	}
 
 	static PDX::PredicateEvaluator CreatePredicateEvaluatorForRowGroup(const std::vector<row_t> &passing_row_ids,

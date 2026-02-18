@@ -47,7 +47,7 @@ public:
 	                                         const std::vector<row_t> &passing_row_ids, idx_t row_group_id,
 	                                         PDX::Heap &heap, std::mutex &heap_mutex);
 
-	void FilteredSearchRowGroup(idx_t row_group_id, idx_t num_clusters_to_probe);
+	void FilteredSearchRowGroup(idx_t row_group_id, idx_t num_clusters_to_try_to_probe);
 
 	/******************************************************************
 	 * Index creation and search methods specific to the global implementation
