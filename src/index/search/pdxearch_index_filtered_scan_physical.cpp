@@ -72,8 +72,12 @@ public:
 	// The partitions to probe per iteration for each row group for all iterations except the first one. Note: the
 	// number of partitions to probe on the first iteration is determined by n_probe.
 	static constexpr idx_t PARTITIONS_TO_PROBE_PER_ROW_GROUP_PER_FOLLOW_UP_ITERATION = 5;
-	idx_t partitions_per_row_group_probed_thus_far {0};
-	// Tracked so we can avoid probing a row group with no tuples that passed the filter in the follow up iterations.
+	// Used together with `max_num_probe_iterations` to determine when all clusters have been probed. This is one of the
+	// "we are ready to return the heap results" exit conditions used in `TryFinalizeSinkPhase`.
+	idx_t num_probe_iterations_performed_thus_far {0};
+	constexpr idx_t GetMaximumNumberOfProbeIterations();
+	const idx_t max_num_probe_iterations {GetMaximumNumberOfProbeIterations()};
+	// Tracked so we can avoid probing a row group with no "tuples that passed the filter" in the follow up iterations.
 	std::vector<idx_t> row_group_ids_of_row_groups_with_passing_tuples;
 	void TryFinalizeSinkPhase(Pipeline &pipeline, Event &event);
 
@@ -84,6 +88,25 @@ public:
 	//! chunks of results.
 	idx_t pdxearch_row_ids_idx {0};
 };
+
+// Computes the maximum number of probe iterations we can possibly perform. Running this many iterations ensures all
+// clusters in each row group are probed. Example: when the selection fraction is so low that there are less than K
+// results to return, then this physical operator will iteratively probe the clusters until all have been visited. Also
+// see `num_probe_iterations_performed_thus_far`.
+constexpr idx_t PhysicalFilteredScanGlobalSinkState::GetMaximumNumberOfProbeIterations() {
+	const idx_t total_num_clusters = index.GetNumClustersPerRowGroup();
+
+	const bool the_first_iteration_probes_all_clusters =
+	    partitions_to_probe_per_row_group_on_first_iteration >= total_num_clusters;
+	if (the_first_iteration_probes_all_clusters) {
+		return 1;
+	}
+
+	const idx_t num_clusters_remaining_to_probe_after_first_iteration =
+	    total_num_clusters - partitions_to_probe_per_row_group_on_first_iteration;
+	return 1 + static_cast<idx_t>(std::ceil(static_cast<float>(num_clusters_remaining_to_probe_after_first_iteration) /
+	                                        PARTITIONS_TO_PROBE_PER_ROW_GROUP_PER_FOLLOW_UP_ITERATION));
+}
 
 unique_ptr<GlobalSinkState> PhysicalPDXearchIndexFilteredScan::GetGlobalSinkState(ClientContext &context) const {
 	return make_uniq<PhysicalFilteredScanGlobalSinkState>(context, *this, *bind_data);
@@ -237,8 +260,7 @@ public:
 	}
 
 	void FinishEvent() override {
-		g_sink.partitions_per_row_group_probed_thus_far +=
-		    PhysicalFilteredScanGlobalSinkState::PARTITIONS_TO_PROBE_PER_ROW_GROUP_PER_FOLLOW_UP_ITERATION;
+		g_sink.num_probe_iterations_performed_thus_far += 1;
 		g_sink.TryFinalizeSinkPhase(*pipeline, *this);
 	}
 };
@@ -247,7 +269,7 @@ SinkFinalizeType PhysicalPDXearchIndexFilteredScan::Finalize(Pipeline &pipeline,
                                                              OperatorSinkFinalizeInput &input) const {
 	auto &g_sink = input.global_state.Cast<PhysicalFilteredScanGlobalSinkState>();
 
-	g_sink.partitions_per_row_group_probed_thus_far += g_sink.partitions_to_probe_per_row_group_on_first_iteration;
+	g_sink.num_probe_iterations_performed_thus_far += 1;
 	g_sink.TryFinalizeSinkPhase(pipeline, event);
 
 	return SinkFinalizeType::READY;
@@ -258,6 +280,7 @@ SinkFinalizeType PhysicalPDXearchIndexFilteredScan::Finalize(Pipeline &pipeline,
 // iteration, which will probe the next X clusters for each row group.
 void PhysicalFilteredScanGlobalSinkState::TryFinalizeSinkPhase(Pipeline &pipeline, Event &event) {
 	D_ASSERT(global_heap->size() <= limit);
+	D_ASSERT(num_probe_iterations_performed_thus_far <= max_num_probe_iterations);
 
 	// The heap (and thus pruning threshold) is initialized with a max float element. This float element should not be
 	// part of the result (it is not valid). There is an edge case where this element is the Kth item (at the top of the
@@ -267,8 +290,7 @@ void PhysicalFilteredScanGlobalSinkState::TryFinalizeSinkPhase(Pipeline &pipelin
 	    this->global_heap->top().distance == HEAP_INITIALIZATION_ELEMENT.distance;
 	const bool is_heap_filled_with_k_valid_results =
 	    this->global_heap->size() == limit && !is_initialization_element_at_top_of_heap;
-	const bool are_all_partitions_probed =
-	    partitions_per_row_group_probed_thus_far >= index.GetNumClustersPerRowGroup();
+	const bool are_all_partitions_probed = num_probe_iterations_performed_thus_far == max_num_probe_iterations;
 
 	if (is_heap_filled_with_k_valid_results || are_all_partitions_probed) {
 		// If we are done, then prepare emission of the results by moving the result row ids into the Source state.
