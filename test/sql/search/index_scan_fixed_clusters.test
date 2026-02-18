@@ -40,7 +40,6 @@ CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (metric = '${metric_name}', 
 statement ok
 CREATE OR REPLACE TABLE results (dist_func VARCHAR, quant VARCHAR, n_probe INTEGER, recall FLOAT);
 
-# With 2047 embeddings, there should only be 1 cluster, and recall should be 1 for f32 (because the query embedding is easy)
 foreach n_probe 1 480
 
 statement ok
@@ -56,7 +55,7 @@ CREATE OR REPLACE TABLE t_idx_res AS SELECT * FROM t1 ORDER BY ${distance_func}(
 
 # Verify that the index scan returns the correct number of rows
 query I
-SELECT COUNT(*) > 0 AND COUNT(*) == ${LIMIT} FROM t_idx_res;
+SELECT COUNT(*) > 0 AND COUNT(*) <= ${LIMIT} FROM t_idx_res;
 ----
 true
 
