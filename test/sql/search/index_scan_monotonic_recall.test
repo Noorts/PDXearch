@@ -43,7 +43,7 @@ CREATE OR REPLACE TABLE results (n_probe INTEGER, recall FLOAT);
 
 # Note: n_probe=0 will probe all clusters. Realistic values depend on the number
 # of clusters which is a function of NUM_ROWS.
-foreach n_probe 1 2 3 4 5 15 50 100 250 300 0
+foreach n_probe 1 2 3 4 5 15 50 70 100 0
 
 statement ok
 SET pdxearch_n_probe = ${n_probe};

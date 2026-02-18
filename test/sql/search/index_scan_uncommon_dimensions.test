@@ -16,16 +16,20 @@ test-env LIMIT 50
 test-env RECALL_THRESHOLD 0.90
 
 statement ok
+SELECT setseed(0.42);
+
+statement ok
 SET late_materialization_max_rows = 0;
+
+# We need the random() to be deterministic
+statement ok
+SET threads = 1;
 
 # ===========================================================================
 # Low dimensions (1-5): f32 only.
 # U8 scalar quantization has insufficient precision with very few dimensions
 # ===========================================================================
 foreach DIMS 1 3 5
-
-statement ok
-SELECT setseed(0.42);
 
 statement ok
 CREATE OR REPLACE TABLE t1 AS
