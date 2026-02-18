@@ -36,25 +36,25 @@ struct KMeansResult {
 
 	auto result = KMeansResult(num_clusters);
 
-    if (num_clusters == 1){
-        // Copy the first embedding as the centroid
-        result.centroids.resize(num_dimensions);
-        result.centroids = std::vector<float>(embeddings, embeddings + num_dimensions);
-        // Assign all embeddings to the first cluster
-        result.assignments.resize(1);
-        for (uint64_t vec_id = 0; vec_id < num_embeddings; vec_id++) {
-            result.assignments[0].emplace_back(vec_id);
-        }
-        return result;
-    }
+	if (num_clusters == 1) {
+		// Copy the first embedding as the centroid
+		result.centroids.resize(num_dimensions);
+		result.centroids = std::vector<float>(embeddings, embeddings + num_dimensions);
+		// Assign all embeddings to the first cluster
+		result.assignments.resize(1);
+		for (uint64_t vec_id = 0; vec_id < num_embeddings; vec_id++) {
+			result.assignments[0].emplace_back(vec_id);
+		}
+		return result;
+	}
 
-    // Compute centroids
-    skmeans::HierarchicalSuperKMeansConfig config;
-    if (num_embeddings < KMeansResult::MIN_EMBEDDINGS_TO_SAMPLE){
-        config.sampling_fraction = 1.0f;
-    } else {
-        config.sampling_fraction = 0.3f;
-    }
+	// Compute centroids
+	skmeans::HierarchicalSuperKMeansConfig config;
+	if (num_embeddings < KMeansResult::MIN_EMBEDDINGS_TO_SAMPLE) {
+		config.sampling_fraction = 1.0f;
+	} else {
+		config.sampling_fraction = 0.3f;
+	}
 	config.angular = distance_metric == PDX::DistanceMetric::COSINE || distance_metric == PDX::DistanceMetric::IP;
 	config.data_already_rotated = true;
 	config.iters_mesoclustering = 3;

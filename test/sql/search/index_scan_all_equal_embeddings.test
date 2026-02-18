@@ -1,0 +1,76 @@
+# name: test/sql/search/index_scan_all_equal_embeddings.test
+# description: Test the case in which all embeddings are the same. This will validate that nothing crashes and we give answers even if all embeddings are in the same cluster
+# group: [search]
+
+require pdxearch
+
+# Variables
+test-env INDEX_SEED 0
+
+test-env DIMS 29
+
+# A lot of embeddings to force the creation of more than 1 cluster
+test-env NUM_ROWS 50000
+
+test-env LIMIT 50
+
+test-env QUERY_EMB [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+
+statement ok
+SET late_materialization_max_rows = 0;
+
+# Generate random embeddings.
+statement ok
+SELECT setseed(0.42);
+
+statement ok
+CREATE TABLE t1 AS
+SELECT
+    i AS id,
+    repeat([CAST(0 AS FLOAT)], ${DIMS})::FLOAT[${DIMS}] AS emb
+FROM range(${NUM_ROWS}) t(i);
+
+foreach metric_name,distance_func l2sq,array_distance cosine,array_cosine_distance ip,array_negative_inner_product
+
+# Compute ground truth (brute-force scan).
+statement ok
+CREATE OR REPLACE TABLE t_gt AS
+SELECT * FROM t1
+ORDER BY ${distance_func}(emb, ${QUERY_EMB}::FLOAT[${DIMS}])
+LIMIT ${LIMIT};
+
+foreach quantization f32 u8
+
+statement ok
+DROP INDEX IF EXISTS t1_idx;
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (metric = '${metric_name}', quantization = '${quantization}', seed = ${INDEX_SEED});
+
+statement ok
+SET pdxearch_n_probe = 0;
+
+# Verify the optimizer uses the index scan.
+query II
+EXPLAIN SELECT * FROM t1
+ORDER BY ${distance_func}(emb, ${QUERY_EMB}::FLOAT[${DIMS}])
+LIMIT ${LIMIT};
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_SCAN.*
+
+statement ok
+CREATE OR REPLACE TABLE t_idx_res AS
+SELECT * FROM t1
+ORDER BY ${distance_func}(emb, ${QUERY_EMB}::FLOAT[${DIMS}])
+LIMIT ${LIMIT};
+
+# Verify that we are getting ${LIMIT} answers
+query I
+SELECT COUNT(*) == ${LIMIT}
+FROM t_idx_res;
+----
+true
+
+endloop
+
+endloop

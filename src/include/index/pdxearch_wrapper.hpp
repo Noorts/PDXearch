@@ -21,7 +21,7 @@ class PDXearchWrapper {
 public:
 	static constexpr PDX::DistanceMetric DEFAULT_DISTANCE_METRIC = PDX::DistanceMetric::L2SQ;
 	static constexpr PDX::Quantization DEFAULT_QUANTIZATION = PDX::Quantization::U8;
-    static constexpr int32_t DEFAULT_N_PROBE = 24; // 5% of the data in a full search
+	static constexpr int32_t DEFAULT_N_PROBE = 24; // 5% of the data in a full search
 
 private:
 	const uint32_t num_dimensions;
@@ -122,13 +122,13 @@ public:
 	// row group falls down to 40k embeddings.
 	static constexpr size_t DEFAULT_N_CLUSTERS_PER_ROW_GROUP = 480;
 
-    // We consider a rowgroup "small" if it has less than 30720 embeddings (25% of a full rowgroup)
-    static constexpr size_t SMALL_ROW_GROUP_SIZE = DEFAULT_ROW_GROUP_SIZE * 0.25;
-    static constexpr size_t N_CLUSTERS_PER_SMALL_ROW_GROUP = 128;
+	// We consider a rowgroup "small" if it has less than 30720 embeddings (25% of a full rowgroup)
+	static constexpr size_t SMALL_ROW_GROUP_SIZE = DEFAULT_ROW_GROUP_SIZE * 0.25;
+	static constexpr size_t N_CLUSTERS_PER_SMALL_ROW_GROUP = 120;
 
-    // Something smaller than this is not worth indexing as the entry cost
-    // to the index becomes too high
-    static constexpr size_t MIN_EMBEDDINGS_TO_INDEX = 2048;
+	// Something smaller than this is not worth indexing as the entry cost
+	// to the index becomes too high
+	static constexpr size_t MIN_EMBEDDINGS_TO_INDEX = 2048;
 
 private:
 	uint32_t num_clusters_per_row_group {};
@@ -151,13 +151,13 @@ public:
 		D_ASSERT(estimated_num_row_groups > 0);
 		row_groups.resize(estimated_num_row_groups);
 
-        if (estimated_cardinality < SMALL_ROW_GROUP_SIZE) {
-            num_clusters_per_row_group = N_CLUSTERS_PER_SMALL_ROW_GROUP;
-        } else if (estimated_cardinality < MIN_EMBEDDINGS_TO_INDEX) {
-            num_clusters_per_row_group = 1;
-        } else {
-            num_clusters_per_row_group = DEFAULT_N_CLUSTERS_PER_ROW_GROUP;
-        }
+		if (estimated_cardinality < MIN_EMBEDDINGS_TO_INDEX) {
+			num_clusters_per_row_group = 1;
+		} else if (estimated_cardinality < SMALL_ROW_GROUP_SIZE) {
+			num_clusters_per_row_group = N_CLUSTERS_PER_SMALL_ROW_GROUP;
+		} else {
+			num_clusters_per_row_group = DEFAULT_N_CLUSTERS_PER_ROW_GROUP;
+		}
 	}
 
 	// Initialize the wrapper's state for this row group. This is called once per row group.
