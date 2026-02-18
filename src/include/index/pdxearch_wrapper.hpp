@@ -114,6 +114,8 @@ public:
 template <PDX::Quantization Q>
 class PDXearchWrapperParallel : public PDXearchWrapper {
 public:
+	using embedding_storage_t = PDX::pdx_data_t<Q>;
+
 	// We aim for a 1:256 ratio of clusters to embeddings. As a DuckDB rowgroup
 	// size is usually 122880, we set 480 clusters per row group. While some
 	// row groups might be smaller, 480 is still a good number, even if the
@@ -182,13 +184,12 @@ public:
 		// Row-major buffer that the current cluster's embeddings are "gathered" into. This buffer is the source for
 		// StoreClusterEmbeddings, the result of which is persistently stored in the index. The buffer is reused across
 		// clusters. For F32: buffer is float. For U8: buffer is uint8_t (quantized).
-		using EmbeddingStorageType = PDX::DataType_t<Q>;
 		size_t max_cluster_size = 0;
 		for (size_t i = 0; i < num_clusters_per_row_group; i++) {
 			max_cluster_size = std::max(max_cluster_size, kmeans_result.assignments[i].size());
 		}
 		auto tmp_cluster_embeddings =
-		    std::make_unique<EmbeddingStorageType[]>(static_cast<uint64_t>(max_cluster_size * num_dimensions));
+		    std::make_unique<embedding_storage_t[]>(static_cast<uint64_t>(max_cluster_size * num_dimensions));
 
 		// Set up the IVF clusters' metadata and store the embeddings.
 		for (size_t cluster_idx = 0; cluster_idx < num_clusters_per_row_group; cluster_idx++) {
@@ -214,8 +215,8 @@ public:
 				}
 			}
 
-			StoreClusterEmbeddings<Q, EmbeddingStorageType>(cluster, *row_group.index, tmp_cluster_embeddings.get(),
-			                                                cluster_size);
+			StoreClusterEmbeddings<Q, embedding_storage_t>(cluster, *row_group.index, tmp_cluster_embeddings.get(),
+			                                               cluster_size);
 		}
 
 		// Note: the searcher depends on a fully initialized index in its constructor.
@@ -238,7 +239,7 @@ public:
 	                                         PDX::Heap &heap, std::mutex &heap_mutex) {
 		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
 
-		std::unique_ptr<PDX::PredicateEvaluator> predicate_evaluator =
+		auto predicate_evaluator =
 		    make_uniq<PDX::PredicateEvaluator>(CreatePredicateEvaluatorForRowGroup(passing_row_ids, row_group));
 
 		row_group.searcher->InitializeSearch(preprocessed_query_embedding, limit, heap, heap_mutex,
@@ -280,6 +281,9 @@ using PDXearchWrapperU8 = PDXearchWrapperParallel<PDX::U8>;
 // search all embeddings in the DuckDB table.
 template <PDX::Quantization Q>
 class PDXearchWrapperGlobal : public PDXearchWrapper {
+public:
+	using embedding_storage_t = PDX::pdx_data_t<Q>;
+
 private:
 	uint32_t num_clusters {};
 	uint64_t total_num_embeddings {};
@@ -331,13 +335,12 @@ public:
 		// Row-major buffer that the current cluster's embeddings are "gathered" into. This buffer is the source for
 		// StoreClusterEmbeddings, the result of which is persistently stored in the index. The buffer is reused across
 		// clusters. For F32: buffer is float. For U8: buffer is uint8_t (quantized).
-		using EmbeddingStorageType = PDX::DataType_t<Q>;
 		size_t max_cluster_size = 0;
 		for (size_t i = 0; i < num_clusters; i++) {
 			max_cluster_size = std::max(max_cluster_size, kmeans_result.assignments[i].size());
 		}
 		auto tmp_cluster_embeddings =
-		    std::make_unique<EmbeddingStorageType[]>(static_cast<uint64_t>(max_cluster_size * num_dimensions));
+		    std::make_unique<embedding_storage_t[]>(static_cast<uint64_t>(max_cluster_size * num_dimensions));
 
 		// Set up the IVF clusters' metadata and store the embeddings.
 		for (size_t cluster_idx = 0; cluster_idx < num_clusters; cluster_idx++) {
@@ -364,8 +367,7 @@ public:
 				}
 			}
 
-			StoreClusterEmbeddings<Q, EmbeddingStorageType>(cluster, *index, tmp_cluster_embeddings.get(),
-			                                                cluster_size);
+			StoreClusterEmbeddings<Q, embedding_storage_t>(cluster, *index, tmp_cluster_embeddings.get(), cluster_size);
 		}
 
 		// Note: the searcher depends on a fully initialized index in its constructor.

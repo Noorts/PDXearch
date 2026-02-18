@@ -13,13 +13,9 @@ namespace PDX {
 /******************************************************************
  * ADSampling pruner
  ******************************************************************/
-template <Quantization q = F32>
+template <Quantization Q = F32>
 class ADSamplingPruner {
-	using DISTANCES_TYPE = DistanceType_t<q>;
-	using VALUE_TYPE = DataType_t<q>;
-	using KNNCandidate_t = KNNCandidate;
-	using VectorComparator_t = VectorComparator;
-	using MatrixR = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+	using matrix_t = eigen_matrix_t;
 
 public:
 	const uint32_t num_dimensions;
@@ -31,15 +27,12 @@ public:
 		}
 #ifdef HAS_FFTW
 		if (num_dimensions >= D_THRESHOLD_FOR_DCT_ROTATION) {
-			matrix = Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(
-			    matrix_p, 1, num_dimensions);
+			matrix = Eigen::Map<const matrix_t>(matrix_p, 1, num_dimensions);
 		} else {
-			matrix = Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(
-			    matrix_p, num_dimensions, num_dimensions);
+			matrix = Eigen::Map<const matrix_t>(matrix_p, num_dimensions, num_dimensions);
 		}
 #else
-		matrix = Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(
-		    matrix_p, num_dimensions, num_dimensions);
+		matrix = Eigen::Map<const matrix_t>(matrix_p, num_dimensions, num_dimensions);
 #endif
 	}
 
@@ -73,7 +66,7 @@ public:
 
 private:
 	float pruning_aggressiveness = ADSAMPLING_PRUNING_AGGRESIVENESS;
-	Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> matrix;
+	matrix_t matrix;
 	std::vector<float> ratios;
 
 	float GetRatio(const size_t &visited_dimensions) const {
@@ -100,10 +93,14 @@ private:
 	 */
 	void Rotate(const float *PDX_RESTRICT const embeddings, float *PDX_RESTRICT const out_buffer,
 	            const size_t n) const {
-		Eigen::Map<const MatrixR> embeddings_matrix(embeddings, static_cast<Eigen::Index>(n),
-		                                            static_cast<Eigen::Index>(num_dimensions));
-		Eigen::Map<MatrixR> out(out_buffer, static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(num_dimensions));
-		out.noalias() = embeddings_matrix * matrix.transpose();
+		const char trans_a = 'T';
+		const char trans_b = 'N';
+		const float alpha = 1.0f;
+		const float beta = 0.0f;
+		int dim = static_cast<int>(num_dimensions);
+		int n_blas = static_cast<int>(n);
+		sgemm_(&trans_a, &trans_b, &dim, &n_blas, &dim, &alpha, matrix.data(), &dim, embeddings, &dim, &beta,
+		       out_buffer, &dim);
 	}
 };
 

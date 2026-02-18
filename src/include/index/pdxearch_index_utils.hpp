@@ -34,7 +34,6 @@ namespace duckdb {
 [[nodiscard]] inline unique_ptr<float[]> GenerateRandomRotationMatrix(const size_t num_dimensions, const int32_t seed) {
 	auto rotation_matrix = make_uniq_array<float>(num_dimensions * num_dimensions);
 
-	// TODO: Confirm seed handling is sound.
 	std::mt19937 gen(seed);
 	std::normal_distribution<float> normal_dist;
 
@@ -64,85 +63,73 @@ namespace duckdb {
 // See the README of the following for a description of the PDX layout:
 // https://github.com/cwida/pdx
 template <PDX::Quantization q, typename T>
-inline void StoreClusterEmbeddings(typename PDX::IndexPDXIVF<q>::CLUSTER_TYPE &cluster,
-                                   const PDX::IndexPDXIVF<q> &index, const T *embeddings, const size_t num_embeddings);
+inline void StoreClusterEmbeddings(typename PDX::IndexPDXIVF<q>::cluster_t &cluster, const PDX::IndexPDXIVF<q> &index,
+                                   const T *embeddings, const size_t num_embeddings);
 
 template <>
 inline void
-StoreClusterEmbeddings<PDX::Quantization::F32, float>(PDX::IndexPDXIVF<PDX::Quantization::F32>::CLUSTER_TYPE &cluster,
+StoreClusterEmbeddings<PDX::Quantization::F32, float>(PDX::IndexPDXIVF<PDX::Quantization::F32>::cluster_t &cluster,
                                                       const PDX::IndexPDXIVF<PDX::Quantization::F32> &index,
                                                       const float *const embeddings, const size_t num_embeddings) {
 	// Store the cluster's data using the transposed PDX layout for float32 as described in:
 	// https://github.com/cwida/pdx?tab=readme-ov-file#the-data-layout
+	using matrix_t = PDX::eigen_matrix_t;
+	using h_matrix_t = Eigen::Matrix<float, Eigen::Dynamic, PDX::H_DIM_SIZE, Eigen::RowMajor>;
 
-	// Vertical dimensions.
-	for (size_t dim = 0; dim < index.num_vertical_dimensions; ++dim) {
-		for (size_t embedding = 0; embedding < num_embeddings; embedding++) {
-			cluster.data[dim * num_embeddings + embedding] = embeddings[(embedding * index.num_dimensions) + dim];
-		}
-	}
+	const auto vertical_d = index.num_vertical_dimensions;
+	const auto horizontal_d = index.num_horizontal_dimensions;
 
-	// Horizontal dimensions decomposed every 64 dimensions.
-	size_t current_horizontal_offset = index.num_vertical_dimensions * num_embeddings;
+	Eigen::Map<const matrix_t> in(embeddings, num_embeddings, index.num_dimensions);
 
-	for (size_t dim_group = 0; dim_group < index.num_horizontal_dimensions; dim_group += PDX::H_DIM_SIZE) {
-		size_t group_size = std::min(PDX::H_DIM_SIZE, index.num_horizontal_dimensions - dim_group);
-		size_t actual_dim = index.num_vertical_dimensions + dim_group;
+	// Vertical block: transpose the first vertical_d columns into dimension-major order.
+	Eigen::Map<matrix_t> out(cluster.data, vertical_d, num_embeddings);
+	out.noalias() = in.leftCols(vertical_d).transpose();
 
-		for (size_t embedding = 0; embedding < num_embeddings; embedding++) {
-			memcpy(cluster.data + current_horizontal_offset + embedding * group_size,
-			       embeddings + ((embedding * index.num_dimensions) + actual_dim), group_size * sizeof(float));
-		}
-		current_horizontal_offset += num_embeddings * group_size;
+	// Horizontal blocks: copy H_DIM_SIZE columns at a time, keeping each embedding's values contiguous.
+	float *horizontal_out = cluster.data + num_embeddings * vertical_d;
+	for (size_t j = 0; j < horizontal_d; j += PDX::H_DIM_SIZE) {
+		Eigen::Map<h_matrix_t> out_h(horizontal_out, num_embeddings, PDX::H_DIM_SIZE);
+		out_h.noalias() = in.block(0, vertical_d + j, num_embeddings, PDX::H_DIM_SIZE);
+		horizontal_out += num_embeddings * PDX::H_DIM_SIZE;
 	}
 }
 
 template <>
 inline void
-StoreClusterEmbeddings<PDX::Quantization::U8, uint8_t>(PDX::IndexPDXIVF<PDX::Quantization::U8>::CLUSTER_TYPE &cluster,
+StoreClusterEmbeddings<PDX::Quantization::U8, uint8_t>(PDX::IndexPDXIVF<PDX::Quantization::U8>::cluster_t &cluster,
                                                        const PDX::IndexPDXIVF<PDX::Quantization::U8> &index,
                                                        const uint8_t *const embeddings, const size_t num_embeddings) {
 	// Store the cluster's data using the transposed PDX layout for U8.
-	// The vertical block uses 4-way interleaving: for each group of 4 consecutive dimensions,
-	// each vector's 4 values are stored contiguously. This enables NEON vdotq_u32 processing.
+	// The vertical block uses interleaving: for each group of U8_INTERLEAVE_SIZE consecutive dimensions,
+	// each vector's values are stored contiguously. This enables NEON vdotq_u32 / AVX2 processing.
+	using u8_matrix_t = Eigen::Matrix<uint8_t, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+	using u8_v_matrix_t = Eigen::Matrix<uint8_t, Eigen::Dynamic, PDX::U8_INTERLEAVE_SIZE, Eigen::RowMajor>;
+	using u8_h_matrix_t = Eigen::Matrix<uint8_t, Eigen::Dynamic, PDX::H_DIM_SIZE, Eigen::RowMajor>;
 
-	// Vertical dimensions (4-way interleaved).
+	const auto vertical_d = index.num_vertical_dimensions;
+	const auto horizontal_d = index.num_horizontal_dimensions;
+
+	Eigen::Map<const u8_matrix_t> in(embeddings, num_embeddings, index.num_dimensions);
+
+	// Vertical dimensions (interleaved): copy U8_INTERLEAVE_SIZE columns at a time into row-major blocks.
 	size_t dim = 0;
-	for (; dim + 4 <= index.num_vertical_dimensions; dim += 4) {
-		for (size_t embedding = 0; embedding < num_embeddings; embedding++) {
-			cluster.data[dim * num_embeddings + embedding * 4 + 0] =
-			    embeddings[(embedding * index.num_dimensions) + dim + 0];
-			cluster.data[dim * num_embeddings + embedding * 4 + 1] =
-			    embeddings[(embedding * index.num_dimensions) + dim + 1];
-			cluster.data[dim * num_embeddings + embedding * 4 + 2] =
-			    embeddings[(embedding * index.num_dimensions) + dim + 2];
-			cluster.data[dim * num_embeddings + embedding * 4 + 3] =
-			    embeddings[(embedding * index.num_dimensions) + dim + 3];
-		}
+	for (; dim + PDX::U8_INTERLEAVE_SIZE <= vertical_d; dim += PDX::U8_INTERLEAVE_SIZE) {
+		Eigen::Map<u8_v_matrix_t> out_v(cluster.data + dim * num_embeddings, num_embeddings, PDX::U8_INTERLEAVE_SIZE);
+		out_v.noalias() = in.block(0, dim, num_embeddings, PDX::U8_INTERLEAVE_SIZE);
 	}
-	// Compact tail
-	if (dim < index.num_vertical_dimensions) {
-		auto remaining = static_cast<uint32_t>(index.num_vertical_dimensions - dim);
-		for (size_t embedding = 0; embedding < num_embeddings; embedding++) {
-			for (uint32_t k = 0; k < remaining; k++) {
-				cluster.data[dim * num_embeddings + embedding * remaining + k] =
-				    embeddings[(embedding * index.num_dimensions) + dim + k];
-			}
-		}
+	// Compact tail for remaining vertical dimensions (< U8_INTERLEAVE_SIZE).
+	if (dim < vertical_d) {
+		auto remaining = static_cast<Eigen::Index>(vertical_d - dim);
+		Eigen::Map<u8_matrix_t> out_v(cluster.data + dim * num_embeddings, num_embeddings, remaining);
+		out_v.noalias() = in.block(0, dim, num_embeddings, remaining);
 	}
 
-	// Horizontal dimensions decomposed every 64 dimensions (same layout as F32, with uint8_t).
-	size_t current_horizontal_offset = index.num_vertical_dimensions * num_embeddings;
-
-	for (size_t dim_group = 0; dim_group < index.num_horizontal_dimensions; dim_group += PDX::H_DIM_SIZE) {
-		size_t group_size = std::min(PDX::H_DIM_SIZE, static_cast<size_t>(index.num_horizontal_dimensions) - dim_group);
-		size_t actual_dim = index.num_vertical_dimensions + dim_group;
-
-		for (size_t embedding = 0; embedding < num_embeddings; embedding++) {
-			memcpy(cluster.data + current_horizontal_offset + embedding * group_size,
-			       embeddings + ((embedding * index.num_dimensions) + actual_dim), group_size * sizeof(uint8_t));
-		}
-		current_horizontal_offset += num_embeddings * group_size;
+	// Horizontal blocks: copy H_DIM_SIZE columns at a time, keeping each embedding's values contiguous.
+	uint8_t *horizontal_out = cluster.data + num_embeddings * vertical_d;
+	for (size_t j = 0; j < horizontal_d; j += PDX::H_DIM_SIZE) {
+		Eigen::Map<u8_h_matrix_t> out_h(horizontal_out, num_embeddings, PDX::H_DIM_SIZE);
+		out_h.noalias() = in.block(0, vertical_d + j, num_embeddings, PDX::H_DIM_SIZE);
+		horizontal_out += num_embeddings * PDX::H_DIM_SIZE;
 	}
 }
 

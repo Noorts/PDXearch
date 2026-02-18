@@ -23,7 +23,7 @@
 
 namespace PDX {
 
-template <DistanceMetric alpha, Quantization q>
+template <DistanceMetric alpha, Quantization Q>
 class DistanceComputer {};
 
 template <>
