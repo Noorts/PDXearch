@@ -100,17 +100,13 @@ struct RowIdClusterMapping {
 template <PDX::Quantization Q>
 class PDXRowGroup {
 public:
-	using index_t = PDX::IndexPDXIVF<Q>;
-	using pruner_t = PDX::ADSamplingPruner<Q>;
-	using searcher_t = PDX::PDXearch<Q>;
-
 	// Row group embedding storage and metadata.
-	std::unique_ptr<index_t> index;
+	std::unique_ptr<PDX::IndexPDXIVF<Q>> index;
 	std::vector<RowIdClusterMapping> row_id_metadata {DEFAULT_ROW_GROUP_SIZE};
 
-	std::unique_ptr<pruner_t> pruner;
+	std::unique_ptr<PDX::ADSamplingPruner<Q>> pruner;
 	// The searcher is reinitialized and reused across DuckDB queries.
-	std::unique_ptr<searcher_t> searcher;
+	std::unique_ptr<PDX::PDXearch<Q>> searcher;
 };
 
 // The PDXearchWrapper for the parallel implementation. The parallel implementation uses a separate index for each row
@@ -119,11 +115,6 @@ template <PDX::Quantization Q>
 class PDXearchWrapperParallel : public PDXearchWrapper {
 public:
 	using embedding_storage_t = PDX::pdx_data_t<Q>;
-	using row_group_t = PDXRowGroup<Q>;
-	using index_ivf_t = PDX::IndexPDXIVF<Q>;
-	using pruner_t = PDX::ADSamplingPruner<Q>;
-	using searcher_t = PDX::PDXearch<Q>;
-	using quantizer_t = PDX::ScalarQuantizer<Q>;
 
 	// We aim for a 1:256 ratio of clusters to embeddings. As a DuckDB rowgroup
 	// size is usually 122880, we set 480 clusters per row group. While some
@@ -133,7 +124,7 @@ public:
 
 private:
 	uint32_t num_clusters_per_row_group {};
-	std::vector<row_group_t> row_groups;
+	std::vector<PDXRowGroup<Q>> row_groups;
 
 public:
 	PDXearchWrapperParallel(PDX::DistanceMetric distance_metric, uint32_t num_dimensions, uint32_t n_probe,
@@ -158,7 +149,7 @@ public:
 	// Initialize the wrapper's state for this row group. This is called once per row group.
 	void SetUpIndexForRowGroup(const row_t *const row_ids, const float *const embeddings, const idx_t num_embeddings,
 	                           const idx_t row_group_id) {
-		row_group_t &row_group = row_groups[row_group_id];
+		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
 
 		const auto num_dimensions = GetNumDimensions();
 		// Additional constraints on the number of dimensions are enforced in `pdxearch_index_plan.cpp`.
@@ -171,17 +162,17 @@ public:
 		float quantization_base = 0.0f;
 		float quantization_scale = 1.0f;
 		if constexpr (Q == PDX::U8) {
-			const auto params = quantizer_t::ComputeQuantizationParams(embeddings, static_cast<size_t>(num_embeddings) *
-			                                                                           num_dimensions);
+			const auto params = PDX::ScalarQuantizer<Q>::ComputeQuantizationParams(
+			    embeddings, static_cast<size_t>(num_embeddings) * num_dimensions);
 			quantization_base = params.quantization_base;
 			quantization_scale = params.quantization_scale;
-			row_group.index = make_uniq<index_ivf_t>(num_dimensions, num_embeddings, num_clusters_per_row_group,
-			                                         IsNormalized(), quantization_scale, quantization_base);
+			row_group.index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters_per_row_group,
+			                                                 IsNormalized(), quantization_scale, quantization_base);
 		} else {
-			row_group.index =
-			    make_uniq<index_ivf_t>(num_dimensions, num_embeddings, num_clusters_per_row_group, IsNormalized());
+			row_group.index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters_per_row_group,
+			                                                 IsNormalized());
 		}
-		row_group.pruner = make_uniq<pruner_t>(num_dimensions, rotation_matrix.get());
+		row_group.pruner = make_uniq<PDX::ADSamplingPruner<Q>>(num_dimensions, rotation_matrix.get());
 
 		// Compute K-means centroids and embedding-to-centroid assignment (always on float embeddings).
 		KMeansResult kmeans_result = ComputeKMeans(embeddings, num_embeddings, num_dimensions,
@@ -214,7 +205,7 @@ public:
 				cluster.indices[position_in_cluster] = row_id;
 
 				if constexpr (Q == PDX::U8) {
-					quantizer_t quantizer(num_dimensions);
+					PDX::ScalarQuantizer<Q> quantizer(num_dimensions);
 					quantizer.QuantizeEmbedding(embeddings + (embedding_idx * num_dimensions), quantization_base,
 					                            quantization_scale,
 					                            tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions));
@@ -229,24 +220,24 @@ public:
 		}
 
 		// Note: the searcher depends on a fully initialized index in its constructor.
-		row_group.searcher = make_uniq<searcher_t>(*row_group.index, *row_group.pruner);
+		row_group.searcher = make_uniq<PDX::PDXearch<Q>>(*row_group.index, *row_group.pruner);
 	}
 
 	void InitializeSearchForRowGroup(float *const preprocessed_query_embedding, const idx_t limit,
 	                                 const idx_t row_group_id, PDX::Heap &heap, std::mutex &heap_mutex) {
-		row_group_t &row_group = row_groups[row_group_id];
+		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
 		row_group.searcher->InitializeSearch(preprocessed_query_embedding, limit, heap, heap_mutex);
 	}
 
 	void SearchRowGroup(const idx_t row_group_id, const idx_t num_clusters_to_probe) {
-		row_group_t &row_group = row_groups[row_group_id];
+		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
 		row_group.searcher->Search(num_clusters_to_probe);
 	}
 
 	void InitializeFilteredSearchForRowGroup(float *const preprocessed_query_embedding, const idx_t limit,
 	                                         const std::vector<row_t> &passing_row_ids, const idx_t row_group_id,
 	                                         PDX::Heap &heap, std::mutex &heap_mutex) {
-		row_group_t &row_group = row_groups[row_group_id];
+		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
 
 		auto predicate_evaluator =
 		    make_uniq<PDX::PredicateEvaluator>(CreatePredicateEvaluatorForRowGroup(passing_row_ids, row_group));
@@ -256,12 +247,12 @@ public:
 	}
 
 	void FilteredSearchRowGroup(const idx_t row_group_id, const idx_t num_clusters_to_probe) {
-		row_group_t &row_group = row_groups[row_group_id];
+		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
 		row_group.searcher->FilteredSearch(num_clusters_to_probe);
 	}
 
 	static PDX::PredicateEvaluator CreatePredicateEvaluatorForRowGroup(const std::vector<row_t> &passing_row_ids,
-	                                                                   const row_group_t &row_group) {
+	                                                                   const PDXRowGroup<Q> &row_group) {
 		PDX::PredicateEvaluator predicate_evaluator(row_group.index->num_clusters,
 		                                            row_group.index->total_num_embeddings);
 
@@ -292,19 +283,15 @@ template <PDX::Quantization Q>
 class PDXearchWrapperGlobal : public PDXearchWrapper {
 public:
 	using embedding_storage_t = PDX::pdx_data_t<Q>;
-	using index_ivf_t = PDX::IndexPDXIVF<Q>;
-	using pruner_t = PDX::ADSamplingPruner<Q>;
-	using searcher_t = PDX::PDXearch<Q>;
-	using quantizer_t = PDX::ScalarQuantizer<Q>;
 
 private:
 	uint32_t num_clusters {};
 	uint64_t total_num_embeddings {};
 	std::vector<RowIdClusterMapping> row_id_cluster_mapping;
 
-	std::unique_ptr<index_ivf_t> index;
-	std::unique_ptr<pruner_t> pruner;
-	std::unique_ptr<searcher_t> searcher;
+	std::unique_ptr<PDX::IndexPDXIVF<Q>> index;
+	std::unique_ptr<PDX::ADSamplingPruner<Q>> pruner;
+	std::unique_ptr<PDX::PDXearch<Q>> searcher;
 
 public:
 	PDXearchWrapperGlobal(PDX::DistanceMetric distance_metric, uint32_t num_dimensions, uint32_t n_probe, int32_t seed,
@@ -312,7 +299,7 @@ public:
 	    : PDXearchWrapper(Q, distance_metric, num_dimensions, n_probe, seed),
 	      num_clusters(ComputeNumberOfClusters(estimated_cardinality)), total_num_embeddings(estimated_cardinality),
 	      row_id_cluster_mapping(estimated_cardinality),
-	      pruner(make_uniq<pruner_t>(num_dimensions, rotation_matrix.get())) {
+	      pruner(make_uniq<PDX::ADSamplingPruner<Q>>(num_dimensions, rotation_matrix.get())) {
 		// Additional constraints on the number of dimensions are enforced in `pdxearch_index_plan.cpp`.
 		D_ASSERT(num_dimensions > 0);
 		D_ASSERT(estimated_cardinality > 0);
@@ -328,14 +315,14 @@ public:
 		float quantization_base = 0.0f;
 		float quantization_scale = 1.0f;
 		if constexpr (Q == PDX::U8) {
-			const auto params = quantizer_t::ComputeQuantizationParams(embeddings, static_cast<size_t>(num_embeddings) *
-			                                                                           num_dimensions);
+			const auto params = PDX::ScalarQuantizer<Q>::ComputeQuantizationParams(
+			    embeddings, static_cast<size_t>(num_embeddings) * num_dimensions);
 			quantization_base = params.quantization_base;
 			quantization_scale = params.quantization_scale;
-			index = make_uniq<index_ivf_t>(num_dimensions, num_embeddings, num_clusters, IsNormalized(),
-			                               quantization_scale, quantization_base);
+			index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters, IsNormalized(),
+			                                       quantization_scale, quantization_base);
 		} else {
-			index = make_uniq<index_ivf_t>(num_dimensions, num_embeddings, num_clusters, IsNormalized());
+			index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters, IsNormalized());
 		}
 
 		// Compute K-means centroids and embedding-to-centroid assignment (always on float embeddings).
@@ -370,7 +357,7 @@ public:
 				cluster.indices[position_in_cluster] = row_id;
 
 				if constexpr (Q == PDX::U8) {
-					quantizer_t quantizer(num_dimensions);
+					PDX::ScalarQuantizer<Q> quantizer(num_dimensions);
 					quantizer.QuantizeEmbedding(embeddings + (embedding_idx * num_dimensions), quantization_base,
 					                            quantization_scale,
 					                            tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions));
@@ -384,7 +371,7 @@ public:
 		}
 
 		// Note: the searcher depends on a fully initialized index in its constructor.
-		searcher = make_uniq<searcher_t>(*index, *pruner);
+		searcher = make_uniq<PDX::PDXearch<Q>>(*index, *pruner);
 	}
 
 	std::unique_ptr<std::vector<row_t>> Search(const float *const query_embedding, const idx_t limit,
