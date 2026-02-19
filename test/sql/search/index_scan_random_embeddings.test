@@ -37,7 +37,7 @@ FROM (
 ) sub
 GROUP BY id;
 
-# TODO: Recall doesn't go over 30% when using array_negative_inner_product. 
+# TODO: Recall doesn't go over 30% when using array_negative_inner_product.
 # @lkuffo: I believe this is something to do with math and random(), but it could be a bug too
 foreach metric_name,distance_func l2sq,array_distance cosine,array_cosine_distance
 

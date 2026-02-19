@@ -1,5 +1,5 @@
 # name: test/sql/search/index_scan_fixed_clusters_one.test
-# description: Ensure we create exactly 1 cluster if the number of embeddings is less than 2048
+# description: Ensure we create exactly 1 cluster if the number of embeddings is less than 2048. See `ComputeNumClustersForRowGroup`.
 # group: [search]
 
 require parquet

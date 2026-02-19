@@ -1,5 +1,5 @@
 # name: test/sql/search/index_scan_fixed_clusters_small_rowgroup.test
-# description: Ensure we create exactly N_CLUSTERS_PER_SMALL_ROW_GROUP (120) clusters
+# description: Ensure we create exactly 120 clusters. See `ComputeNumClustersForRowGroup`.
 # group: [search]
 
 require parquet
