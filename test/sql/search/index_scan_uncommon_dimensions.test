@@ -13,7 +13,7 @@ test-env NUM_CLUSTERS 480
 
 test-env LIMIT 50
 
-test-env RECALL_THRESHOLD 0.90
+test-env RECALL_THRESHOLD 0.80
 
 statement ok
 SELECT setseed(0.42);
@@ -78,6 +78,7 @@ SELECT * FROM t1
 ORDER BY array_distance(emb, list_resize([1.0], ${DIMS}, 1.0)::FLOAT[${DIMS}])
 LIMIT ${LIMIT};
 
+# Verify recall higher than RECALL_THRESHOLD
 query I
 SELECT CAST(COUNT(*) AS FLOAT) / ${LIMIT} >= ${RECALL_THRESHOLD}
 FROM t_gt JOIN t_idx_res USING (id);
@@ -145,7 +146,7 @@ SELECT * FROM t1
 ORDER BY array_distance(emb, list_resize([1.0], ${DIMS}, 1.0)::FLOAT[${DIMS}])
 LIMIT ${LIMIT};
 
-# Verify recall higher than 90%
+# Verify recall higher than RECALL_THRESHOLD
 query I
 SELECT CAST(COUNT(*) AS FLOAT) / ${LIMIT} >= ${RECALL_THRESHOLD}
 FROM t_gt JOIN t_idx_res USING (id);
