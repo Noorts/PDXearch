@@ -347,8 +347,7 @@ string PDXearchIndex::GetDistanceMetric() const {
 }
 
 const case_insensitive_map_t<PDX::DistanceMetric> PDXearchIndex::DISTANCE_METRIC_MAP = {
-    {"l2sq", PDX::DistanceMetric::L2SQ},
-    {"cosine", PDX::DistanceMetric::COSINE},
+    {"l2sq", PDX::DistanceMetric::L2SQ}, {"cosine", PDX::DistanceMetric::COSINE},
     // {"ip", PDX::DistanceMetric::IP},
 };
 
