@@ -167,7 +167,6 @@ public:
 		D_ASSERT(num_dimensions > 0);
 		D_ASSERT(num_embeddings > 0);
 		D_ASSERT(num_clusters_per_row_group > 0);
-		// TODO(@lkuffo): See issue #38. num_embeddings < DEFAULT_N_CLUSTERS_PER_ROW_GROUP is currently not handled.
 		D_ASSERT(num_embeddings >= num_clusters_per_row_group);
 
 		float quantization_base = 0.0f;

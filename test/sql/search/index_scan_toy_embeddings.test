@@ -22,9 +22,7 @@ SET threads = 1;
 statement ok
 SET late_materialization_max_rows = 0;
 
-# Generate random embeddings.
-statement ok
-SELECT setseed(0.42);
+set seed 0.42
 
 statement ok
 CREATE TABLE t1 AS
@@ -33,7 +31,7 @@ SELECT
     repeat([CAST(i AS FLOAT)], ${DIMS})::FLOAT[${DIMS}] AS emb
 FROM range(${NUM_ROWS}) t(i);
 
-foreach metric_name,distance_func l2sq,array_distance cosine,array_cosine_distance ip,array_negative_inner_product
+foreach metric_name,distance_func l2sq,array_distance cosine,array_cosine_distance
 
 # Compute ground truth (brute-force scan).
 statement ok
@@ -70,7 +68,7 @@ LIMIT ${LIMIT};
 
 # Verify all rows are returned
 query I
-SELECT CAST(COUNT(*) AS FLOAT) == ${NUM_ROWS}
+SELECT COUNT(*) == ${NUM_ROWS}
 FROM t_gt JOIN t_idx_res USING (id);
 ----
 true
@@ -115,7 +113,7 @@ LIMIT 1;
 
 # Verify the correct row is returned
 query I
-SELECT CAST(COUNT(*) AS FLOAT) == 1
+SELECT COUNT(*) == 1
 FROM t_gt JOIN t_idx_res USING (id);
 ----
 true

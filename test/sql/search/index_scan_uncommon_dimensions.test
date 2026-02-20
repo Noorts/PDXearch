@@ -9,14 +9,15 @@ test-env INDEX_SEED 0
 
 test-env NUM_ROWS 48000
 
+test-env NUM_ROWS_LARGE_DIMS 1024
+
 test-env NUM_CLUSTERS 480
 
 test-env LIMIT 50
 
 test-env RECALL_THRESHOLD 0.80
 
-statement ok
-SELECT setseed(0.42);
+set seed 0.42
 
 statement ok
 SET late_materialization_max_rows = 0;
@@ -95,9 +96,6 @@ endloop
 foreach DIMS 11 31 63 64 127 128 129 181 500
 
 statement ok
-SELECT setseed(0.42);
-
-statement ok
 CREATE OR REPLACE TABLE t1 AS
 SELECT
     id,
@@ -113,6 +111,64 @@ FROM (
     FROM range(${NUM_ROWS}) e(i), range(${DIMS}) d(i)
 ) sub
 GROUP BY id;
+
+statement ok
+CREATE OR REPLACE TABLE t_gt AS
+SELECT * FROM t1
+ORDER BY array_distance(emb, list_resize([1.0], ${DIMS}, 1.0)::FLOAT[${DIMS}])
+LIMIT ${LIMIT};
+
+foreach quantization f32 u8
+
+statement ok
+DROP INDEX IF EXISTS t1_idx;
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (metric = 'l2sq', quantization = '${quantization}', seed = ${INDEX_SEED});
+
+# Probe all clusters for maximum recall.
+statement ok
+SET pdxearch_n_probe = 0;
+
+# Verify the optimizer uses the index scan.
+query II
+EXPLAIN SELECT * FROM t1
+ORDER BY array_distance(emb, list_resize([1.0], ${DIMS}, 1.0)::FLOAT[${DIMS}])
+LIMIT ${LIMIT};
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_SCAN.*
+
+statement ok
+CREATE OR REPLACE TABLE t_idx_res AS
+SELECT * FROM t1
+ORDER BY array_distance(emb, list_resize([1.0], ${DIMS}, 1.0)::FLOAT[${DIMS}])
+LIMIT ${LIMIT};
+
+# Verify recall higher than RECALL_THRESHOLD
+query I
+SELECT CAST(COUNT(*) AS FLOAT) / ${LIMIT} >= ${RECALL_THRESHOLD}
+FROM t_gt JOIN t_idx_res USING (id);
+----
+true
+
+endloop
+
+endloop
+
+
+# ===========================================================================
+# Extremely high dimensions, we create completely random embeddings
+# ===========================================================================
+foreach DIMS 4096 16384 
+
+set seed 0.42
+
+statement ok
+CREATE OR REPLACE TABLE t1 AS
+SELECT
+    i AS id,
+    repeat([CAST(i AS FLOAT)], ${DIMS})::FLOAT[${DIMS}] AS emb
+FROM range(${NUM_ROWS_LARGE_DIMS}) t(i);
 
 statement ok
 CREATE OR REPLACE TABLE t_gt AS

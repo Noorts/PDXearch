@@ -339,8 +339,8 @@ string PDXearchIndex::GetDistanceMetric() const {
 		return "l2sq";
 	case PDX::DistanceMetric::COSINE:
 		return "cosine";
-	case PDX::DistanceMetric::IP:
-		return "ip";
+	// case PDX::DistanceMetric::IP:
+	// 	return "ip";
 	default:
 		throw InternalException("Unknown distance metric");
 	}
@@ -349,7 +349,7 @@ string PDXearchIndex::GetDistanceMetric() const {
 const case_insensitive_map_t<PDX::DistanceMetric> PDXearchIndex::DISTANCE_METRIC_MAP = {
     {"l2sq", PDX::DistanceMetric::L2SQ},
     {"cosine", PDX::DistanceMetric::COSINE},
-    {"ip", PDX::DistanceMetric::IP},
+    // {"ip", PDX::DistanceMetric::IP},
 };
 
 const case_insensitive_map_t<PDX::Quantization> PDXearchIndex::QUANTIZATION_MAP = {
@@ -367,9 +367,9 @@ unique_ptr<ExpressionMatcher> PDXearchIndex::MakeFunctionMatcher(const PDXearchW
 	case PDX::DistanceMetric::COSINE:
 		distance_functions = {"array_cosine_distance", "<=>"};
 		break;
-	case PDX::DistanceMetric::IP:
-		distance_functions = {"array_negative_inner_product", "<#>"};
-		break;
+	// case PDX::DistanceMetric::IP:
+	// 	distance_functions = {"array_negative_inner_product", "<#>"};
+	//  break;
 	default:
 		throw NotImplementedException("Unknown distance metric");
 	}

@@ -38,10 +38,8 @@ struct KMeansResult {
 
 	if (num_clusters == 1) {
 		// Copy the first embedding as the centroid
-		result.centroids.resize(num_dimensions);
 		result.centroids = std::vector<float>(embeddings, embeddings + num_dimensions);
 		// Assign all embeddings to the first cluster
-		result.assignments.resize(1);
 		for (uint64_t vec_id = 0; vec_id < num_embeddings; vec_id++) {
 			result.assignments[0].emplace_back(vec_id);
 		}
@@ -60,6 +58,7 @@ struct KMeansResult {
 	config.iters_mesoclustering = 3;
 	config.iters_fineclustering = 5;
 	config.iters_refinement = 1;
+	config.suppress_warnings = true;
 	config.seed = seed;
 
 	// TODO(@lkuffo): If per rowgroup, we should send n_threads = 1, otherwise, we should not set it

@@ -27,7 +27,7 @@ INSERT INTO t1 FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet'
 
 foreach quantization f32 u8
 
-foreach metric_name,distance_func l2sq,array_distance cosine,array_cosine_distance ip,array_negative_inner_product
+foreach metric_name,distance_func l2sq,array_distance cosine,array_cosine_distance
 
 statement ok
 CREATE OR REPLACE TABLE t_gt AS SELECT * FROM t1 ORDER BY ${distance_func}(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
@@ -50,7 +50,7 @@ SET pdxearch_n_probe = ${n_probe};
 query II
 EXPLAIN SELECT * FROM t1 ORDER BY ${distance_func}(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
 ----
-physical_plan	<REGEX>:.*PDXEARCH_INDEX_SCAN.*
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_SCAN.*Total Clusters: 1[^0-9].*
 
 statement ok
 CREATE OR REPLACE TABLE t_idx_res AS SELECT * FROM t1 ORDER BY ${distance_func}(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
@@ -70,7 +70,7 @@ endloop
 
 # Ensure that we have found the embedding we are looking for in the single existing cluster
 query I
-SELECT recall == 1.0 FROM results LIMIT ${LIMIT};
+SELECT recall == 1.0 FROM results;
 ----
 true
 
