@@ -21,7 +21,7 @@ class PDXearchWrapper {
 public:
 	static constexpr PDX::DistanceMetric DEFAULT_DISTANCE_METRIC = PDX::DistanceMetric::L2SQ;
 	static constexpr PDX::Quantization DEFAULT_QUANTIZATION = PDX::Quantization::U8;
-	static constexpr int32_t DEFAULT_N_PROBE = 128;
+	static constexpr int32_t DEFAULT_N_PROBE = 24; // 5% of the data in a full search
 
 private:
 	const uint32_t num_dimensions;
@@ -116,17 +116,28 @@ class PDXearchWrapperParallel : public PDXearchWrapper {
 public:
 	using embedding_storage_t = PDX::pdx_data_t<Q>;
 
-	// We aim for a 1:256 ratio of clusters to embeddings. As a DuckDB rowgroup
-	// size is usually 122880, we set 480 clusters per row group. While some
-	// row groups might be smaller, 480 is still a good number, even if the
-	// row group falls down to 40k embeddings.
-	static constexpr size_t DEFAULT_N_CLUSTERS_PER_ROW_GROUP = 480;
-
 private:
 	uint32_t num_clusters_per_row_group {};
 	std::vector<PDXRowGroup<Q>> row_groups;
 
 public:
+	// The number of clusters depends on the number of embeddings in the row group. We have three levels.
+	// In general we aim for a 1:256 ratio of clusters to embeddings.
+	static constexpr size_t ComputeNumClustersForRowGroup(const size_t num_embeddings) {
+		if (num_embeddings < 2048) {
+			// 1. No clustering: not worth indexing. One cluster minimizes overhead.
+			return 1;
+		} else if (num_embeddings < static_cast<size_t>(DEFAULT_ROW_GROUP_SIZE * 0.25)) {
+			// 2. Small row group: It has less than 30720 embeddings (25% of a full rowgroup).
+			return 120;
+		} else {
+			// 3. Default: As the DuckDB row group size is usually 122880, we set 480 clusters per row group. While some
+			//    row groups might be smaller, 480 is still a good number, even if the row group falls down to 40k
+			//    embeddings.
+			return 480;
+		}
+	}
+
 	PDXearchWrapperParallel(PDX::DistanceMetric distance_metric, uint32_t num_dimensions, uint32_t n_probe,
 	                        int32_t seed, idx_t estimated_cardinality)
 	    : PDXearchWrapper(Q, distance_metric, num_dimensions, n_probe, seed) {
@@ -143,7 +154,7 @@ public:
 		D_ASSERT(estimated_num_row_groups > 0);
 		row_groups.resize(estimated_num_row_groups);
 
-		num_clusters_per_row_group = DEFAULT_N_CLUSTERS_PER_ROW_GROUP;
+		num_clusters_per_row_group = ComputeNumClustersForRowGroup(estimated_cardinality);
 	}
 
 	// Initialize the wrapper's state for this row group. This is called once per row group.
@@ -156,7 +167,6 @@ public:
 		D_ASSERT(num_dimensions > 0);
 		D_ASSERT(num_embeddings > 0);
 		D_ASSERT(num_clusters_per_row_group > 0);
-		// TODO(@lkuffo): See issue #38. num_embeddings < DEFAULT_N_CLUSTERS_PER_ROW_GROUP is currently not handled.
 		D_ASSERT(num_embeddings >= num_clusters_per_row_group);
 
 		float quantization_base = 0.0f;

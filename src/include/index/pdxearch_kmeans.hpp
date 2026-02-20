@@ -20,6 +20,8 @@ struct KMeansResult {
 	// cluster/centroid.
 	std::vector<std::vector<uint64_t>> assignments;
 
+	static constexpr size_t MIN_EMBEDDINGS_TO_SAMPLE = 30720;
+
 	explicit KMeansResult(uint32_t num_clusters) : assignments(num_clusters) {
 	}
 };
@@ -34,14 +36,29 @@ struct KMeansResult {
 
 	auto result = KMeansResult(num_clusters);
 
+	if (num_clusters == 1) {
+		// Copy the first embedding as the centroid
+		result.centroids = std::vector<float>(embeddings, embeddings + num_dimensions);
+		// Assign all embeddings to the first cluster
+		for (uint64_t vec_id = 0; vec_id < num_embeddings; vec_id++) {
+			result.assignments[0].emplace_back(vec_id);
+		}
+		return result;
+	}
+
 	// Compute centroids
 	skmeans::HierarchicalSuperKMeansConfig config;
-	config.sampling_fraction = 0.3f;
+	if (num_embeddings < KMeansResult::MIN_EMBEDDINGS_TO_SAMPLE) {
+		config.sampling_fraction = 1.0f;
+	} else {
+		config.sampling_fraction = 0.3f;
+	}
 	config.angular = distance_metric == PDX::DistanceMetric::COSINE || distance_metric == PDX::DistanceMetric::IP;
 	config.data_already_rotated = true;
 	config.iters_mesoclustering = 3;
 	config.iters_fineclustering = 5;
 	config.iters_refinement = 1;
+	config.suppress_warnings = true;
 	config.seed = seed;
 
 	// TODO(@lkuffo): If per rowgroup, we should send n_threads = 1, otherwise, we should not set it

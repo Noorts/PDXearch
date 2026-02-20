@@ -34,7 +34,7 @@ Binder Error: PDXearch index 'metric' must be a string
 statement error
 CREATE INDEX idx ON t1 USING PDXEARCH (emb) WITH (metric = 'test');
 ----
-Binder Error: PDXearch index 'metric' must be one of: 'ip', 'cosine', 'l2sq'
+Binder Error: PDXearch index 'metric' must be one of: 'cosine', 'l2sq'
 
 foreach metric l2sq
 

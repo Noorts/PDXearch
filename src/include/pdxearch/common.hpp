@@ -31,11 +31,11 @@ namespace PDX {
 
 static constexpr float PROPORTION_HORIZONTAL_DIM = 0.75f;
 static constexpr size_t D_THRESHOLD_FOR_DCT_ROTATION = 512;
-static constexpr size_t PDX_MAX_DIMS = 65536;
+static constexpr size_t PDX_MAX_DIMS = 16384;
 static constexpr size_t H_DIM_SIZE = 64;
 static constexpr size_t U8_INTERLEAVE_SIZE = 4;
 static constexpr uint32_t DIMENSIONS_FETCHING_SIZES[20] = {16,  16,  32,  32,  32,  32,  64,  64,   64,   64,
-                                                           128, 128, 128, 128, 256, 256, 512, 1024, 2048, 65536};
+                                                           128, 128, 128, 128, 256, 256, 512, 1024, 2048, 16384};
 
 static constexpr bool AllFetchingSizesMultipleOfU8InterleaveSize() {
 	for (auto s : DIMENSIONS_FETCHING_SIZES) {

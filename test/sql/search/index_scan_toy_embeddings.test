@@ -1,0 +1,119 @@
+# name: test/sql/search/index_scan_toy_embeddings.test
+# description: Test index scan with toy embeddings (prime number as dimensionality, only 50 embeddings).
+# group: [search]
+
+require pdxearch
+
+# Variables
+test-env INDEX_SEED 0
+
+test-env DIMS 29
+
+test-env NUM_ROWS 50
+
+test-env LIMIT 50
+
+test-env QUERY_EMB [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29]
+
+# We need the random() to be deterministic
+statement ok
+SET threads = 1;
+
+statement ok
+SET late_materialization_max_rows = 0;
+
+set seed 0.42
+
+statement ok
+CREATE TABLE t1 AS
+SELECT
+    i AS id,
+    repeat([CAST(i AS FLOAT)], ${DIMS})::FLOAT[${DIMS}] AS emb
+FROM range(${NUM_ROWS}) t(i);
+
+foreach metric_name,distance_func l2sq,array_distance cosine,array_cosine_distance
+
+# Compute ground truth (brute-force scan).
+statement ok
+CREATE OR REPLACE TABLE t_gt AS
+SELECT * FROM t1
+ORDER BY ${distance_func}(emb, ${QUERY_EMB}::FLOAT[${DIMS}])
+LIMIT ${LIMIT};
+
+foreach quantization f32 u8
+
+statement ok
+DROP INDEX IF EXISTS t1_idx;
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (metric = '${metric_name}', quantization = '${quantization}', seed = ${INDEX_SEED});
+
+# There should only exist 1 cluster containing the 50 embeddings
+statement ok
+SET pdxearch_n_probe = 1;
+
+# Verify the optimizer uses the index scan.
+query II
+EXPLAIN SELECT * FROM t1
+ORDER BY ${distance_func}(emb, ${QUERY_EMB}::FLOAT[${DIMS}])
+LIMIT ${LIMIT};
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_SCAN.*
+
+statement ok
+CREATE OR REPLACE TABLE t_idx_res AS
+SELECT * FROM t1
+ORDER BY ${distance_func}(emb, ${QUERY_EMB}::FLOAT[${DIMS}])
+LIMIT ${LIMIT};
+
+# Verify all rows are returned
+query I
+SELECT COUNT(*) == ${NUM_ROWS}
+FROM t_gt JOIN t_idx_res USING (id);
+----
+true
+
+endloop
+
+endloop
+
+
+# Easy query embedding test, LIMIT = 1 answer should always be correct with l2sq
+test-env EASY_QUERY_EMB [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+
+# Compute ground truth (brute-force scan).
+statement ok
+CREATE OR REPLACE TABLE t_gt AS
+SELECT * FROM t1
+ORDER BY array_distance(emb, ${EASY_QUERY_EMB}::FLOAT[${DIMS}])
+LIMIT 1;
+
+statement ok
+DROP INDEX IF EXISTS t1_idx;
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (metric = 'l2sq', quantization = 'f32', seed = ${INDEX_SEED});
+
+statement ok
+SET pdxearch_n_probe = 1;
+
+# Verify the optimizer uses the index scan.
+query II
+EXPLAIN SELECT * FROM t1
+ORDER BY array_distance(emb, ${EASY_QUERY_EMB}::FLOAT[${DIMS}])
+LIMIT 1;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_SCAN.*
+
+statement ok
+CREATE OR REPLACE TABLE t_idx_res AS
+SELECT * FROM t1
+ORDER BY array_distance(emb, ${EASY_QUERY_EMB}::FLOAT[${DIMS}])
+LIMIT 1;
+
+# Verify the correct row is returned
+query I
+SELECT COUNT(*) == 1
+FROM t_gt JOIN t_idx_res USING (id);
+----
+true

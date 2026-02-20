@@ -57,7 +57,7 @@ endloop
 # Invalid number of dimensions
 # ============================================
 
-foreach dims 65537 70000
+foreach dims 16385 70000
 
 statement ok
 CREATE OR REPLACE TABLE t1 (id INTEGER, emb FLOAT[${dims}]);
@@ -68,6 +68,6 @@ INSERT INTO t1 SELECT i + 1 as id, list_transform(range(${dims}), x -> random())
 statement error
 CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb);
 ----
-<REGEX>:Binder Error: PDXearch index FLOAT array length \(i\.e\., dimensions\) must be less than or equal to 65536, got .*
+<REGEX>:Binder Error: PDXearch index FLOAT array length \(i\.e\., dimensions\) must be less than or equal to 16384, got .*
 
 endloop
