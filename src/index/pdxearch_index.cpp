@@ -244,6 +244,22 @@ idx_t PDXearchIndex::GetInMemorySize(IndexLock &state) {
 	return pdxearch_wrapper->GetInMemorySizeInBytes();
 }
 
+unique_ptr<PDXearchIndexStats> PDXearchIndex::GetStats(const ClientContext &context) const {
+	auto result = make_uniq<PDXearchIndexStats>();
+
+	// Make sure to sync any changes made here to `pdxearch_index_info_function.cpp`.
+	result->metric = GetDistanceMetric();
+	result->quantization = GetQuantization();
+	result->num_dimensions = static_cast<int64_t>(GetNumDimensions());
+	result->n_probe = static_cast<int64_t>(pdxearch_wrapper->GetNProbe());
+	result->seed = static_cast<int64_t>(pdxearch_wrapper->GetSeed());
+	result->is_normalized = IsNormalized();
+	result->approximate_lower_bound_memory_usage_bytes =
+	    static_cast<int64_t>(pdxearch_wrapper->GetInMemorySizeInBytes());
+
+	return result;
+}
+
 /******************************************************************
  * Index persistence
  ******************************************************************/
@@ -333,6 +349,22 @@ bool PDXearchIndex::TryBindIndexExpression(LogicalGet &get, unique_ptr<Expressio
 	return false;
 }
 
+string PDXearchIndex::GetQuantization() const {
+	switch (pdxearch_wrapper->GetQuantization()) {
+	case PDX::Quantization::F32:
+		return "f32";
+	case PDX::Quantization::U8:
+		return "u8";
+	default:
+		throw InternalException("Unknown quantization");
+	}
+}
+
+const case_insensitive_map_t<PDX::Quantization> PDXearchIndex::QUANTIZATION_MAP = {
+    {"f32", PDX::Quantization::F32},
+    {"u8", PDX::Quantization::U8},
+};
+
 string PDXearchIndex::GetDistanceMetric() const {
 	switch (pdxearch_wrapper->GetDistanceMetric()) {
 	case PDX::DistanceMetric::L2SQ:
@@ -349,11 +381,6 @@ string PDXearchIndex::GetDistanceMetric() const {
 const case_insensitive_map_t<PDX::DistanceMetric> PDXearchIndex::DISTANCE_METRIC_MAP = {
     {"l2sq", PDX::DistanceMetric::L2SQ}, {"cosine", PDX::DistanceMetric::COSINE},
     // {"ip", PDX::DistanceMetric::IP},
-};
-
-const case_insensitive_map_t<PDX::Quantization> PDXearchIndex::QUANTIZATION_MAP = {
-    {"f32", PDX::Quantization::F32},
-    {"u8", PDX::Quantization::U8},
 };
 
 unique_ptr<ExpressionMatcher> PDXearchIndex::MakeFunctionMatcher(const PDXearchWrapper &pdxearch_wrapper) {

@@ -86,6 +86,7 @@ public:
 		return rotation_matrix.get();
 	}
 
+	// An approximate lower bound of the index's size in memory.
 	virtual uint64_t GetInMemorySizeInBytes() const = 0;
 };
 
