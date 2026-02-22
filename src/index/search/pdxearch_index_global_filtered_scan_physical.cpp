@@ -187,6 +187,8 @@ InsertionOrderPreservingMap<string> PhysicalGlobalPDXearchIndexFilteredScan::Par
 	result["PDXearch Index"] = bind_data->index.GetIndexName();
 	result["Normalized"] = bind_data->index.Cast<PDXearchIndex>().IsNormalized() ? "true" : "false";
 	result["Clusters"] = StringUtil::Format("%zu", bind_data->index.Cast<PDXearchIndex>().GetNumClusters());
+	const idx_t index_in_memory_size = bind_data->index.Cast<BoundIndex>().GetInMemorySize();
+	result["Index Size"] = ConvertBytesToHumanReadableString(index_in_memory_size);
 	SetEstimatedCardinality(result, estimated_cardinality);
 
 	return result;
