@@ -241,7 +241,7 @@ void PDXearchIndex::VerifyAllocations(IndexLock &state) {
 }
 
 idx_t PDXearchIndex::GetInMemorySize(IndexLock &state) {
-	return 0;
+	return pdxearch_wrapper->GetInMemorySizeInBytes();
 }
 
 /******************************************************************
