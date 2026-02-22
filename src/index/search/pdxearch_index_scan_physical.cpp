@@ -226,6 +226,8 @@ InsertionOrderPreservingMap<string> PhysicalPDXearchIndexScan::ParamsToString() 
 	    StringUtil::Format("%zu", bind_data->index.Cast<PDXearchIndex>().GetNumClustersPerRowGroup() *
 	                                  bind_data->index.Cast<PDXearchIndex>().GetNumRowGroups());
 	result["Row Groups"] = StringUtil::Format("%zu", bind_data->index.Cast<PDXearchIndex>().GetNumRowGroups());
+	const idx_t index_in_memory_size = bind_data->index.Cast<BoundIndex>().GetInMemorySize();
+	result["Index Size"] = ConvertBytesToHumanReadableString(index_in_memory_size);
 	SetEstimatedCardinality(result, estimated_cardinality);
 
 	return result;
