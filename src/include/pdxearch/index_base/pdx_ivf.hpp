@@ -32,6 +32,17 @@ public:
 	      is_normalized(is_normalized) {
 		clusters.reserve(num_clusters);
 	}
+
+	uint64_t GetInMemorySizeInBytes() const {
+		uint64_t in_memory_size_in_bytes = 0;
+		in_memory_size_in_bytes += sizeof(*this);
+		for (const auto &cluster : clusters) {
+			in_memory_size_in_bytes += cluster.GetInMemorySizeInBytes();
+		}
+		in_memory_size_in_bytes += (clusters.capacity() - clusters.size()) * sizeof(*clusters.data());
+		in_memory_size_in_bytes += centroids.capacity() * sizeof(*centroids.data());
+		return in_memory_size_in_bytes;
+	}
 };
 
 template <>
@@ -63,6 +74,17 @@ public:
 	      inverse_quantization_scale_squared(1.0f / (quantization_scale * quantization_scale)),
 	      quantization_base(quantization_base) {
 		clusters.reserve(num_clusters);
+	}
+
+	uint64_t GetInMemorySizeInBytes() const {
+		uint64_t in_memory_size_in_bytes = 0;
+		in_memory_size_in_bytes += sizeof(*this);
+		for (const auto &cluster : clusters) {
+			in_memory_size_in_bytes += cluster.GetInMemorySizeInBytes();
+		}
+		in_memory_size_in_bytes += (clusters.capacity() - clusters.size()) * sizeof(*clusters.data());
+		in_memory_size_in_bytes += centroids.capacity() * sizeof(*centroids.data());
+		return in_memory_size_in_bytes;
 	}
 };
 

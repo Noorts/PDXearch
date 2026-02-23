@@ -64,10 +64,6 @@ public:
 		throw NotImplementedException("PDXearchWrapper::Delete() not implemented");
 	}
 
-	uint64_t GetInMemorySize() const {
-		throw NotImplementedException("PDXearchWrapper::GetInMemorySize() not implemented");
-	}
-
 	uint32_t GetNumDimensions() const {
 		return num_dimensions;
 	}
@@ -89,6 +85,9 @@ public:
 	float *GetRotationMatrix() const {
 		return rotation_matrix.get();
 	}
+
+	// An approximate lower bound of the index's size in memory.
+	virtual uint64_t GetInMemorySizeInBytes() const = 0;
 };
 
 struct RowIdClusterMapping {
@@ -107,6 +106,14 @@ public:
 	std::unique_ptr<PDX::ADSamplingPruner<Q>> pruner;
 	// The searcher is reinitialized and reused across DuckDB queries.
 	std::unique_ptr<PDX::PDXearch<Q>> searcher;
+
+	// Returns the in-memory size of the persistent elements of the row group in bytes.
+	uint64_t GetInMemorySizeInBytes() const {
+		uint64_t in_memory_size_in_bytes = sizeof(*this);
+		in_memory_size_in_bytes += index->GetInMemorySizeInBytes();
+		in_memory_size_in_bytes += row_id_metadata.capacity() * sizeof(*row_id_metadata.data());
+		return in_memory_size_in_bytes;
+	}
 };
 
 // The PDXearchWrapper for the parallel implementation. The parallel implementation uses a separate index for each row
@@ -282,6 +289,14 @@ public:
 	idx_t GetNumRowGroups() const {
 		return row_groups.size();
 	}
+
+	uint64_t GetInMemorySizeInBytes() const override {
+		uint64_t in_memory_size_in_bytes = sizeof(*this);
+		for (const auto &row_group : row_groups) {
+			in_memory_size_in_bytes += row_group.GetInMemorySizeInBytes();
+		}
+		return in_memory_size_in_bytes;
+	}
 };
 
 using PDXearchWrapperF32 = PDXearchWrapperParallel<PDX::F32>;
@@ -434,6 +449,13 @@ public:
 
 	idx_t GetNumClusters() const {
 		return num_clusters;
+	}
+
+	uint64_t GetInMemorySizeInBytes() const override {
+		uint64_t in_memory_size_in_bytes = sizeof(*this);
+		in_memory_size_in_bytes += index->GetInMemorySizeInBytes();
+		in_memory_size_in_bytes += row_id_cluster_mapping.capacity() * sizeof(*row_id_cluster_mapping.data());
+		return in_memory_size_in_bytes;
 	}
 };
 

@@ -89,6 +89,8 @@ static InsertionOrderPreservingMap<string> PDXearchIndexScanToString(TableFuncti
 	result["Table"] = bind_data.table.name;
 	result["PDXearch Index"] = bind_data.index.GetIndexName();
 	result["Clusters"] = StringUtil::Format("%zu", pdxearch_index.GetNumClusters());
+	const idx_t index_in_memory_size = bind_data.index.Cast<BoundIndex>().GetInMemorySize();
+	result["Index Size"] = ConvertBytesToHumanReadableString(index_in_memory_size);
 
 	return result;
 }

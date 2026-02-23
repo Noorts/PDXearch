@@ -11,6 +11,16 @@
 
 namespace duckdb {
 
+struct PDXearchIndexStats {
+	string metric;
+	string quantization;
+	int64_t num_dimensions;
+	int64_t n_probe;
+	int64_t seed;
+	bool is_normalized;
+	int64_t approximate_lower_bound_memory_usage_bytes;
+};
+
 class PDXearchIndex : public BoundIndex {
 public:
 	static constexpr const char *TYPE_NAME = "PDXEARCH";
@@ -86,6 +96,8 @@ public:
 
 	idx_t GetInMemorySize(IndexLock &state) override;
 
+	unique_ptr<PDXearchIndexStats> GetStats(const ClientContext &context) const;
+
 	/******************************************************************
 	 * Index persistence
 	 ******************************************************************/
@@ -136,9 +148,7 @@ public:
 		return static_cast<PDXearchWrapperGlobalF32 *>(pdxearch_wrapper.get())->GetNumClusters();
 	}
 
-	PDX::Quantization GetQuantization() const {
-		return pdxearch_wrapper->GetQuantization();
-	}
+	string GetQuantization() const;
 
 	idx_t GetNumDimensions() const {
 		return pdxearch_wrapper->GetNumDimensions();

@@ -3,6 +3,7 @@
 #include <Eigen/Dense>
 #include <random>
 
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/storage/storage_info.hpp"
 #include "pdxearch/common.hpp"
 #include "pdxearch/index_base/pdx_ivf.hpp"
@@ -170,6 +171,25 @@ public:
 
 [[nodiscard]] inline constexpr bool DistanceMetricRequiresNormalization(const PDX::DistanceMetric distance_metric) {
 	return distance_metric == PDX::DistanceMetric::COSINE || distance_metric == PDX::DistanceMetric::IP;
+}
+
+[[nodiscard]] inline string ConvertBytesToHumanReadableString(const uint64_t bytes) {
+	constexpr uint64_t kB = 1000;
+	constexpr uint64_t MB = kB * 1000;
+	constexpr uint64_t GB = MB * 1000;
+	constexpr uint64_t TB = GB * 1000;
+
+	if (bytes >= TB) {
+		return StringUtil::Format("%.2f TB", static_cast<double>(bytes) / static_cast<double>(TB));
+	} else if (bytes >= GB) {
+		return StringUtil::Format("%.2f GB", static_cast<double>(bytes) / static_cast<double>(GB));
+	} else if (bytes >= MB) {
+		return StringUtil::Format("%.2f MB", static_cast<double>(bytes) / static_cast<double>(MB));
+	} else if (bytes >= kB) {
+		return StringUtil::Format("%.2f kB", static_cast<double>(bytes) / static_cast<double>(kB));
+	} else {
+		return StringUtil::Format("%llu bytes", bytes);
+	}
 }
 
 } // namespace duckdb
