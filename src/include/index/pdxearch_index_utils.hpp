@@ -18,14 +18,12 @@ namespace duckdb {
 
 [[nodiscard]] inline constexpr uint32_t ComputeNumberOfClusters(const uint32_t num_embeddings) {
 	// Based on:
-	// https://github.com/cwida/PDX/blob/91618e01e574e594e27c71abfe3b1d5094657d53/benchmarks/python_scripts/setup_core_index.py#L17-L22
+	// https://github.com/pgvector/pgvector?tab=readme-ov-file#ivfflat
 
-	if (num_embeddings < 500000) {
-		return std::ceil(2 * std::sqrt(num_embeddings));
-	} else if (num_embeddings < 2500000) {
-		return std::ceil(4 * std::sqrt(num_embeddings));
+	if (num_embeddings <= 1000000) {
+		return std::max<uint32_t>(1, std::ceil(num_embeddings / 1000.0));
 	} else {
-		return std::ceil(8 * std::sqrt(num_embeddings));
+		return std::ceil(std::sqrt(num_embeddings));
 	}
 }
 
