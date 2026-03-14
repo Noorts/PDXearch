@@ -232,8 +232,12 @@ bool PDXearchIndex::MergeIndexes(IndexLock &state, BoundIndex &other_index) {
 void PDXearchIndex::Vacuum(IndexLock &state) {
 }
 
-string PDXearchIndex::VerifyAndToString(IndexLock &state, const bool only_verify) {
-	throw NotImplementedException("PDXearchIndex::VerifyAndToString() not implemented");
+void PDXearchIndex::Verify(IndexLock &state) {
+	throw NotImplementedException("PDXearchIndex::Verify() not implemented");
+}
+
+string PDXearchIndex::ToString(IndexLock &state, bool display_ascii) {
+	throw NotImplementedException("PDXearchIndex::ToString() not implemented");
 }
 
 void PDXearchIndex::VerifyAllocations(IndexLock &state) {
