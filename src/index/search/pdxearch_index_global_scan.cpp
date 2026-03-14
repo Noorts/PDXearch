@@ -57,7 +57,6 @@ static unique_ptr<GlobalTableFunctionState> PDXearchIndexScanInitGlobal(ClientCo
 }
 
 static void PDXearchIndexScanExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-
 	auto &bind_data = data_p.bind_data->Cast<PDXearchIndexScanBindData>();
 	auto &state = data_p.global_state->Cast<PDXearchIndexScanGlobalState>();
 	auto &transaction = DuckTransaction::Get(context, bind_data.table.catalog);
