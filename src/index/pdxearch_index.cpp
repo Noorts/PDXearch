@@ -1,3 +1,4 @@
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "pdxearch/common.hpp"
 #include "index/pdxearch_index.hpp"
 
