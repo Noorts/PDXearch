@@ -14,7 +14,6 @@ PDXearchIndex::PDXearchIndex(const string &name, IndexConstraintType index_const
                              const case_insensitive_map_t<Value> &index_creation_options,
                              const IndexStorageInfo &persistence_info, idx_t estimated_cardinality)
     : BoundIndex(name, TYPE_NAME, index_constraint_type, column_ids, table_io_manager, unbound_expressions, db) {
-
 	if (index_constraint_type != IndexConstraintType::NONE) {
 		throw NotImplementedException("PDXearch indexes do not support unique or primary key constraints");
 	}
@@ -312,7 +311,6 @@ bool PDXearchIndex::TryMatchDistanceFunction(const unique_ptr<Expression> &expr,
 
 static void TryBindIndexExpressionInternal(Expression &expr, idx_t table_idx, const vector<column_t> &index_columns,
                                            const vector<ColumnIndex> &table_columns, bool &success, bool &found) {
-
 	if (expr.type == ExpressionType::BOUND_COLUMN_REF) {
 		found = true;
 		auto &ref = expr.Cast<BoundColumnRefExpression>();
@@ -424,7 +422,6 @@ unique_ptr<ExpressionMatcher> PDXearchIndex::MakeFunctionMatcher(const PDXearchW
 }
 
 void PDXearchModule::RegisterIndex(DatabaseInstance &db) {
-
 	IndexType index_type;
 
 	index_type.name = PDXearchIndex::TYPE_NAME;

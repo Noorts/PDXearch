@@ -26,7 +26,6 @@ public:
 	    : context(context), op(op), limit(bind_data.limit), index(bind_data.index.Cast<PDXearchIndex>()),
 	      preprocessed_query_embedding(make_uniq_array<float>(index.GetNumDimensions())), search_started(false),
 	      search_completed(false), pdxearch_row_ids(nullptr), pdxearch_row_ids_idx(0) {
-
 		// Preprocess the query embedding.
 		const EmbeddingPreprocessor embedding_preprocessor =
 		    EmbeddingPreprocessor(index.GetNumDimensions(), index.GetRotationMatrix());

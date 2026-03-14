@@ -451,7 +451,6 @@ public:
 	}
 
 	static bool OptimizeChildren(ClientContext &context, unique_ptr<LogicalOperator> &plan) {
-
 		auto ok = TryOptimize(context, plan);
 		// Recursively optimize the children
 		for (auto &child : plan->children) {
@@ -471,7 +470,6 @@ public:
 				    // Filtered search
 				    (child->children[0]->type == LogicalOperatorType::LOGICAL_EXTENSION_OPERATOR &&
 				     child->children[0]->GetName() == "PDXEARCH_INDEX_FILT_SCAN")) {
-
 					auto &parent_projection = plan->Cast<LogicalProjection>();
 					auto &child_projection = child->Cast<LogicalProjection>();
 
@@ -515,7 +513,7 @@ public:
 
 void PDXearchModule::RegisterScanOptimizer(DatabaseInstance &db) {
 	// Register the optimizer extension
-	db.config.optimizer_extensions.push_back(PDXearchIndexScanOptimizer());
+	OptimizerExtension::Register(db.config, PDXearchIndexScanOptimizer());
 }
 
 } // namespace duckdb
