@@ -121,17 +121,17 @@ static void PDXearchIndexInfoExecute(ClientContext &context, TableFunctionInput 
 		auto &table_info = *storage.GetDataTableInfo();
 
 		table_info.BindIndexes(context, PDXearchIndex::TYPE_NAME);
-		table_info.GetIndexes().Scan([&](Index &index) {
+		for (auto &index : table_info.GetIndexes().Indexes()) {
 			if (!index.IsBound() || PDXearchIndex::TYPE_NAME != index.GetIndexType()) {
-				return false;
+				continue;
 			}
 			auto &cast_index = index.Cast<PDXearchIndex>();
 			if (cast_index.name == index_entry.name) {
 				pdxearch_index = &cast_index;
-				return true;
+				break;
 			}
-			return false;
-		});
+			continue;
+		};
 
 		if (!pdxearch_index) {
 			throw BinderException("Index %s not found", index_entry.name);
