@@ -351,8 +351,8 @@ unique_ptr<LocalSourceState> PhysicalPDXearchIndexFilteredScan::GetLocalSourceSt
 	return make_uniq<PhysicalFilteredScanLocalSourceState>();
 }
 
-SourceResultType PhysicalPDXearchIndexFilteredScan::GetData(ExecutionContext &context, DataChunk &output_chunk,
-                                                            OperatorSourceInput &input) const {
+SourceResultType PhysicalPDXearchIndexFilteredScan::GetDataInternal(ExecutionContext &context, DataChunk &output_chunk,
+                                                                    OperatorSourceInput &input) const {
 	auto &g_sink = sink_state->Cast<PhysicalFilteredScanGlobalSinkState>();
 	auto &g_source = input.global_state.Cast<PhysicalFilteredScanGlobalSourceState>();
 

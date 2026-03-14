@@ -171,8 +171,8 @@ unique_ptr<LocalSourceState> PhysicalPDXearchIndexScan::GetLocalSourceState(Exec
 	return make_uniq<PDXearchScanLocalSourceState>();
 }
 
-SourceResultType PhysicalPDXearchIndexScan::GetData(ExecutionContext &context, DataChunk &output_chunk,
-                                                    OperatorSourceInput &input) const {
+SourceResultType PhysicalPDXearchIndexScan::GetDataInternal(ExecutionContext &context, DataChunk &output_chunk,
+                                                            OperatorSourceInput &input) const {
 	auto &g_state = input.global_state.Cast<PDXearchScanGlobalSourceState>();
 
 	// Trigger parallel search of all row groups.
