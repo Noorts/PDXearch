@@ -90,7 +90,9 @@ public:
 
 	void Vacuum(IndexLock &state) override;
 
-	string VerifyAndToString(IndexLock &state, const bool only_verify) override;
+	void Verify(IndexLock &state) override;
+
+	string ToString(IndexLock &state, bool display_ascii) override;
 
 	void VerifyAllocations(IndexLock &state) override;
 
