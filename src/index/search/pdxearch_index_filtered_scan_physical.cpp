@@ -146,6 +146,7 @@ SinkResultType PhysicalPDXearchIndexFilteredScan::Sink(ExecutionContext &context
 	D_ASSERT(input_chunk.ColumnCount() == 1);
 	D_ASSERT(input_chunk.data[0].GetType() == LogicalType::ROW_TYPE);
 
+	input_chunk.data[0].Flatten(input_chunk.size());
 	const auto input_chunk_row_ids = FlatVector::GetData<row_t>(input_chunk.data[0]);
 	const idx_t row_group_id = GetRowGroupId(input_chunk_row_ids[0]);
 	D_ASSERT(l_sink.current_row_group_id <= row_group_id);
