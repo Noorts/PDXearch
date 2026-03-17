@@ -8,6 +8,8 @@
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_top_n.hpp"
 #include "duckdb/storage/data_table.hpp"
+
+#include "index/pdxearch_blob_codec.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 
 #include "index/pdxearch_module.hpp"
@@ -323,9 +325,21 @@ public:
 			const auto num_dimensions = cast_index.GetNumDimensions();
 			const auto &matched_embedding = const_expr_ref.get().Cast<BoundConstantExpression>().value;
 			auto query_embedding = make_unsafe_uniq_array<float>(num_dimensions);
-			auto embedding_elements = ArrayValue::GetChildren(matched_embedding);
-			for (idx_t i = 0; i < num_dimensions; i++) {
-				query_embedding[i] = embedding_elements[i].GetValue<float>();
+
+			if (matched_embedding.type().id() == LogicalTypeId::BLOB) {
+				// BLOB path: decode the quantized blob to float array
+				auto blob = StringValue::Get(matched_embedding);
+				auto blob_dims = BlobDimensionCount(blob.size());
+				if (blob_dims != num_dimensions) {
+					return false;
+				}
+				DecodeBlobToFloatArray(const_data_ptr_cast(blob.data()), blob.size(), query_embedding.get());
+			} else {
+				// ARRAY path: existing logic
+				auto embedding_elements = ArrayValue::GetChildren(matched_embedding);
+				for (idx_t i = 0; i < num_dimensions; i++) {
+					query_embedding[i] = embedding_elements[i].GetValue<float>();
+				}
 			}
 
 			bind_data =

@@ -17,6 +17,7 @@ public:
 		RegisterScanOptimizer(db);
 
 		RegisterIndexInfo(loader);
+		RegisterBlobFunctions(loader);
 	}
 
 private:
@@ -26,6 +27,7 @@ private:
 	static void RegisterScanOptimizer(DatabaseInstance &db);
 
 	static void RegisterIndexInfo(ExtensionLoader &loader);
+	static void RegisterBlobFunctions(ExtensionLoader &loader);
 };
 
 } // namespace duckdb
