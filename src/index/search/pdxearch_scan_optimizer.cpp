@@ -287,9 +287,9 @@ public:
 		vector<reference<Expression>> bindings;
 
 		table_info.BindIndexes(context, PDXearchIndex::TYPE_NAME);
-		table_info.GetIndexes().Scan([&](Index &index) {
+		for (auto &index : table_info.GetIndexes().Indexes()) {
 			if (!index.IsBound() || PDXearchIndex::TYPE_NAME != index.GetIndexType()) {
-				return false;
+				continue;
 			}
 			auto &cast_index = index.Cast<PDXearchIndex>();
 
@@ -298,12 +298,12 @@ public:
 
 			// Check that the projection expression is a distance function that matches the index
 			if (!cast_index.TryMatchDistanceFunction(projection_expr, bindings)) {
-				return false;
+				continue;
 			}
 			// Check that the PDXearch index actually indexes the expression
 			unique_ptr<Expression> index_expr;
 			if (!cast_index.TryBindIndexExpression(get, index_expr)) {
-				return false;
+				continue;
 			}
 
 			// Now, ensure that one of the bindings is a constant vector, and the other our index expression
@@ -316,7 +316,7 @@ public:
 				if (const_expr_ref.get().type != ExpressionType::VALUE_CONSTANT ||
 				    !index_expr->Equals(index_expr_ref)) {
 					// Nope, not a match, we can't optimize.
-					return false;
+					continue;
 				}
 			}
 
@@ -330,8 +330,8 @@ public:
 
 			bind_data =
 			    make_uniq<PDXearchIndexScanBindData>(duck_table, cast_index, top_n.limit, std::move(query_embedding));
-			return true;
-		});
+			break;
+		}
 
 		if (!bind_data) {
 			// No index found
@@ -437,7 +437,6 @@ public:
 	}
 
 	static bool OptimizeChildren(ClientContext &context, unique_ptr<LogicalOperator> &plan) {
-
 		auto ok = TryOptimize(context, plan);
 		// Recursively optimize the children
 		for (auto &child : plan->children) {
@@ -457,7 +456,6 @@ public:
 				    // Filtered search
 				    (child->children[0]->type == LogicalOperatorType::LOGICAL_EXTENSION_OPERATOR &&
 				     child->children[0]->GetName() == "PDXEARCH_INDEX_FILT_SCAN")) {
-
 					auto &parent_projection = plan->Cast<LogicalProjection>();
 					auto &child_projection = child->Cast<LogicalProjection>();
 
@@ -501,7 +499,7 @@ public:
 
 void PDXearchModule::RegisterScanOptimizer(DatabaseInstance &db) {
 	// Register the optimizer extension
-	db.config.optimizer_extensions.push_back(PDXearchIndexScanOptimizer());
+	OptimizerExtension::Register(db.config, PDXearchIndexScanOptimizer());
 }
 
 } // namespace duckdb

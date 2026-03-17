@@ -8,7 +8,6 @@ namespace duckdb {
 struct PDXearchModule {
 public:
 	static void Register(ExtensionLoader &loader) {
-
 		auto &db = loader.GetDatabaseInstance();
 
 		RegisterIndex(db);

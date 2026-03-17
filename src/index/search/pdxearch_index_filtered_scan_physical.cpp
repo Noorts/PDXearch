@@ -29,7 +29,6 @@ public:
 	                                    const PDXearchIndexPhysicalScanBindData &bind_data)
 	    : context(context), op(op), limit(bind_data.limit), index(bind_data.index.Cast<PDXearchIndex>()),
 	      preprocessed_query_embedding(make_uniq_array<float>(index.GetNumDimensions())), pdxearch_row_ids(nullptr) {
-
 		// Preprocess the query embedding.
 		EmbeddingPreprocessor embedding_preprocessor(index.GetNumDimensions(), index.GetRotationMatrix());
 		embedding_preprocessor.PreprocessEmbedding(bind_data.query_embedding.get(), preprocessed_query_embedding.get(),
@@ -352,8 +351,8 @@ unique_ptr<LocalSourceState> PhysicalPDXearchIndexFilteredScan::GetLocalSourceSt
 	return make_uniq<PhysicalFilteredScanLocalSourceState>();
 }
 
-SourceResultType PhysicalPDXearchIndexFilteredScan::GetData(ExecutionContext &context, DataChunk &output_chunk,
-                                                            OperatorSourceInput &input) const {
+SourceResultType PhysicalPDXearchIndexFilteredScan::GetDataInternal(ExecutionContext &context, DataChunk &output_chunk,
+                                                                    OperatorSourceInput &input) const {
 	auto &g_sink = sink_state->Cast<PhysicalFilteredScanGlobalSinkState>();
 	auto &g_source = input.global_state.Cast<PhysicalFilteredScanGlobalSourceState>();
 

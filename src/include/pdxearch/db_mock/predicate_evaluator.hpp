@@ -7,7 +7,6 @@
 namespace PDX {
 
 class PredicateEvaluator {
-
 public:
 	// Number of tuples per cluster that passed the predicate.
 	std::unique_ptr<uint32_t[]> n_passing_tuples;

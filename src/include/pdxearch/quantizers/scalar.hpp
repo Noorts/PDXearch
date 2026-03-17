@@ -14,7 +14,6 @@ struct ScalarQuantizationParams {
 };
 
 class Quantizer {
-
 public:
 	explicit Quantizer(size_t num_dimensions) : num_dimensions(num_dimensions) {
 	}
