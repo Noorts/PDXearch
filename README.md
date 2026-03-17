@@ -89,15 +89,34 @@ official VSS extension ([VSS docs](https://duckdb.org/docs/stable/core_extension
 ## Limitations
 
 The extension's functionality is limited, as it is still in early development.
-As mentioned above, we aim to address these limitations soon.
+As mentioned above, we aim to address all of these limitations soon.
 
-- **No persistence**: The index should only created in in-memory DuckDB
+- **No persistence**: The index should only be created in in-memory DuckDB
   databases. For disk-resident databases you'll have to manually drop and
-  rebuild an index when you reload a database.
+  rebuild the index when you reload the database (to avoid loading a malformed
+  index from storage).
 
 - **No maintenance**: We currently only support creating an index on static
   collections. This means the index does not yet support updating the index when
   a `INSERT INTO` or `DELETE FROM` statement is invoked on the table.
+
+- **No concurrency**: We do not support concurrent index access yet.
+
+- **Requires full row groups**: The extension currently requires all but the
+  last row group to be completely filled with rows. For example, three row
+  groups where they have 122880, 122880, 4000 rows respectively is valid.
+  Inserting rows in batches of 122880 can help to create such a layout. This is
+  a limitation we aim to address very soon.
+
+- **Late materialization and filter types**: As noted above, we don't optimally
+  handle DuckDB's late materialization optimizer rule yet. Furthermore, on a
+  related note, we currently only support filtered vector similarity queries
+  where DuckDB pushes the entire filter down into the sequential scan. This is
+  not a limitation of our design. We plan to adjust our scan optimizer such that
+  we can process SQL queries with arbitrary predicates. You can check whether
+  your query is currently being optimized by prepending the `EXPLAIN` keyword to
+  your search query and checking if a PDXearch operator is part of the query
+  plan.
 
 - **Configuration options**: The available configuration options are currently
   limited (e.g., quantization, distance functions, normalization).
