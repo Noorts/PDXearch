@@ -6,6 +6,18 @@
 </h3>
 <br>
 
+- [Why PDXearch?](#why-pdxearch)
+- [Install](#install)
+- [Usage](#usage)
+  - [Getting Started](#getting-started)
+  - [Configuration](#configuration)
+    - [Index Creation](#index-creation)
+    - [Index Search](#index-search)
+    - [Index Metadata](#index-metadata)
+- [Limitations](#limitations)
+- [Acknowledgements](#acknowledgements)
+- [License](#license)
+
 ## Why PDXearch?
 
 DuckDB offers vector similarity search (VSS) out of the box, through its
@@ -39,7 +51,9 @@ To build the extension locally, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Usage
 
-To create an index and run a search, we provide an interface similar to the
+### Getting Started
+
+Our syntax is almost identical to that of the
 official VSS extension ([VSS docs](https://duckdb.org/docs/stable/core_extensions/vss)).
 
 1. Start a DuckDB instance with an in-memory database and allow loading unsigned extensions.
@@ -54,27 +68,27 @@ official VSS extension ([VSS docs](https://duckdb.org/docs/stable/core_extension
     LOAD '<Fill in>/PDXearch/build/release/extension/pdxearch/pdxearch.duckdb_extension';
     ```
 
-3. Set up a table.
+3. Ensure you have a table with a fixed-sized `FLOAT[num-dims]` column for your embeddings (below called `embedding`). The table can have any number of other columns. We currently do not support `NULL` values in the `embedding` column.
 
     ```sql
-    CREATE TABLE t1 (id INTEGER, vec FLOAT[512]);
+    CREATE TABLE t1 (id INTEGER, embedding FLOAT[512]);
     ```
 
     ```sql
-    INSERT INTO t1 (id, vec) SELECT i as id, repeat([i], 512) FROM range(20000) t(i);
+    INSERT INTO t1 (id, embedding) SELECT i as id, repeat([i], 512) FROM range(20000) t(i);
     ```
 
-4. Create the PDXearch index and set one of the index's options (n_probe).
+4. Create the PDXearch index to speed up vector similarity search queries. Optionally, configure the index (e.g., the `metric` option). For all options see the [configuration](### Configuration) section.
 
     ```sql
-    CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec) WITH (n_probe = 64);
+    CREATE INDEX t1_idx ON t1 USING PDXEARCH (embedding) WITH (metric = 'l2sq');
     ```
 
 5. Run an approximate filtered vector similarity search where the top 100 rows are returned.
 
     ```sql
     SELECT * FROM t1 WHERE id < 500
-        ORDER BY array_distance(vec, repeat([1000.51], 512)::FLOAT[512]) LIMIT 100;
+        ORDER BY array_distance(embedding, repeat([1000.51], 512)::FLOAT[512]) LIMIT 100;
     ```
 
 > [!WARNING]
@@ -85,6 +99,48 @@ official VSS extension ([VSS docs](https://duckdb.org/docs/stable/core_extension
 > optimization. Unfortunately, the extension does not handle this case optimally
 > yet, leading to a suboptimal query plan when a `K <= 50` VSS query is
 > optimized. We aim to address this behavior in the near future.
+
+### Configuration
+
+#### Index Creation
+
+As shown below, during index creation you can set index creation options in the `WITH` clause. These options cannot be modified after index creation. Drop and recreate the index instead.
+
+```sql
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (vec) WITH (metric = 'l2sq', quantization = 'f32');
+```
+
+Available options:
+
+- `metric`
+  - The distance metric this index speeds up. One index can only optimize one distance metric. If you want two or more distance metrics to be optimized for the same column, then create multiple indexes, where the `metric` option differs.
+  - `'l2sq'` (*default*; Euclidean distance, optimizes `array_distance`), `'cosine'` (Cosine similarity distance, optimizes `array_cosine_distance`). Inner product distance is not supported yet.
+- `quantization`
+  - The precision of the embeddings stored inside the index. Using quantization decreases search latency and index size, but also slightly decreases recall.
+  - `f32` (full precision, 4 bytes), `u8` (*default*; scalar quantization, 1 byte).
+- `n_probe`
+  - Determines the number of partitions/clusters/lists that are explored. Increasing `n_probe` increases the effort spent during a search, thus likely increasing recall, but also increasing search latency. Setting this `n_probe` option will store this value in the index. It can be temporarily overwritten at search time using `pdxearch_n_probe` (see below).
+  - `[0, 2147483647]`. *Default* is `24`. This is per row group, which likely has 480 lists. Set `n_probe` to `0` to ensure all clusters are probed. If `n_probe` exceeds the index's number of lists, then all clusters will be probed.
+- `seed`
+  - The index uses RNG for some internal mechanisms. Set the seed to make behavior reproducible (e.g., for tests or bugs).
+  - `[-2147483647, 2147483647]`. *Default* is random.
+
+> [!NOTE]
+> There is currently no option to set the number of lists/partitions/clusters manually. We set this [automatically](https://github.com/Noorts/PDXearch/blob/e994ac5f8a99fa3467e18670f4e8056fd5ad9572/src/include/index/pdxearch_wrapper.hpp#L131-L146) based on the row group's size.
+
+#### Index Search
+
+DuckDB by default will use all available threads. To set the number of threads to 1, use `SET threads = 1;`. See the [DuckDB documentation](https://duckdb.org/docs/stable/sql/statements/set) for more information.
+
+Before running a search query, you can set the number of clusters to probe to 48 using `SET pdxearch_n_probe = 48`. This will temporarily overwrite the `n_probe` value stored in the index. Use `RESET pdxearch_n_probe` to unset this overwrite. For more information, see the `n_probe` description above.
+
+Prepend your search query with `EXPLAIN` to show the optimized query plan of your vector search query. Optimized query plans will include a `PDXEARCH_INDEX_SCAN` or a `PDXEARCH_INDEX_FILT_SCAN` operator. For more information about `EXPLAIN` see the [DuckDB documentation](https://duckdb.org/docs/stable/guides/meta/explain).
+
+#### Index Metadata
+
+Execute `CALL pdxearch_index_info();` to print metadata about all PDXearch indexes. This includes an approximate lower bound on the index's size in memory.
+
+Execute `FROM duckdb_indexes();` for general information about all indexes.
 
 ## Limitations
 
@@ -118,7 +174,7 @@ As mentioned above, we aim to address all of these limitations soon.
   your search query and checking if a PDXearch operator is part of the query
   plan.
 
-- **Configuration options**: The available configuration options are currently
+- **Configuration options**: The available [configuration options](#configuration) are currently
   limited (e.g., quantization, distance functions, normalization).
 
 - **Stability**
