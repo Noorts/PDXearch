@@ -1,45 +1,115 @@
 # Development
 
+> [!WARNING]
+> The instructions below are for Apple Silicon (M1-M5). We've had success with an Apple M4 Pro running macOS Sequoia 15.6.1. Instructions for other systems will be added at a later date.
+
+- [Development](#development)
+  - [Prerequisites](#prerequisites)
+    - [Install Clang](#install-clang)
+    - [Install CMake](#install-cmake)
+    - [Install vcpkg](#install-vcpkg)
+    - [Install BLAS](#install-blas)
+    - [Install OpenMP](#install-openmp)
+  - [Build](#build)
+    - [Building the Extension](#building-the-extension)
+    - [PDXearch Variants](#pdxearch-variants)
+    - [Clangd Language Server Support](#clangd-language-server-support)
+  - [Clean, Format, Tidy-Check](#clean-format-tidy-check)
+  - [Test](#test)
+
+
+## Prerequisites
+
+- Clang (LLVM Clang 18)
+- CMake (>= 3.12)
+- vcpkg
+- A BLAS implementation
+- OpenMP
+
+Once you have these you can [build the extension](#build).
+
+### Install Clang
+
+```sh
+brew install llvm@18
+```
+
+> [!NOTE]
+> When building the extension (discussed below), explicitly pass the LLVM 18
+> compiler binaries to make sure LLVM@18 is used. For example:
+> `CC=$HOMEBREW_PREFIX/opt/llvm@18/bin/clang CXX=$HOMEBREW_PREFIX/opt/llvm@18/bin/clang++ make`.
+
+### Install CMake
+
+Versions >= 3.12 are supported.
+
+```sh
+brew install cmake
+```
+
+Or instead build and install from the [source](https://gitlab.kitware.com/cmake/cmake).
+
+### Install vcpkg
+
+Install vcpkg prerequisite: pkg-config.
+
+```sh
+brew install pkg-config
+```
+
+Install vcpkg using the instructions below, or check out the [extension template's instructions for vcpkg](https://github.com/duckdb/extension-template?tab=readme-ov-file#managing-dependencies).
+
+Change to a directory where you want vcpkg to be installed.
+
+```sh
+cd ~
+```
+
+```sh
+git clone https://github.com/Microsoft/vcpkg.git
+```
+
+Optionally check out the version we've used.
+
+```sh
+git checkout 4334d8b4c8
+```
+
+```sh
+./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+```
+
+```sh
+export VCPKG_TOOLCHAIN_PATH=`pwd`/vcpkg/scripts/buildsystems/vcpkg.cmake
+```
+
+### Install BLAS
+
+On Apple Silicon (M1-M5) we rely on the Apple Accelerate framework. This means there is nothing to install.
+
+### Install OpenMP
+
+```sh
+brew install libomp
+```
+
+Note: You might have to set `OpenMP_ROOT` in your `.zshrc` file.
+
+```sh
+export OpenMP_ROOT=$(brew --prefix)/opt/libomp
+```
+
 ## Build
 
-The extension relies on a handful of dependencies. They are included in
-a variety of ways, including being copied in (PDXearch headers; AKA vendoring), included as a git submodule (Faiss, DuckDB), and included through the [vcpkg dependency manager](vcpkg.io/) (see [vcpkg.json](vcpkg.json); Eigen3, BLAS, LAPACK). Some need to be available in the environment (OpenMP).
+### Building the Extension
 
-### Building the extension
-
-1. Clone the repo:
+1. Clone the repo and ensure the submodules are also cloned:
 
     ```sh
     git clone --recurse-submodules https://github.com/Noorts/PDXearch.git
     ```
 
-2. Install vcpkg ([detailed instructions](https://github.com/duckdb/extension-template?tab=readme-ov-file#managing-dependencies)):
-
-    ```sh
-    git clone https://github.com/Microsoft/vcpkg.git
-    ```
-
-    ```sh
-    ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-    ```
-
-    ```sh
-    export VCPKG_TOOLCHAIN_PATH=`pwd`/vcpkg/scripts/buildsystems/vcpkg.cmake
-    ```
-
-3. On macOS make sure you have `pkg-config` (for vcpkg) and `libomp` (for OpenMP) installed:
-
-    ```sh
-    brew install pkg-config libomp
-    ```
-
-    Note: You might have to set `OpenMP_ROOT` in your `.zshrc` file.
-
-    ```sh
-    export OpenMP_ROOT=$(brew --prefix)/opt/libomp
-    ```
-
-4. Build the extension (the default is an optimized `release` build):
+2. Build the extension (the default is an optimized `release` build):
 
     ```sh
     cd PDXearch
@@ -49,26 +119,36 @@ a variety of ways, including being copied in (PDXearch headers; AKA vendoring), 
     make
     ```
 
-    Other build modes include `debug` and `reldebug`.
+    Other build modes include `debug` and `reldebug`. Include `DISABLE_SANITIZER=1` to avoid errors raised by the DuckDB core itself.
 
     ```sh
-    make debug
+    DISABLE_SANITIZER=1 make debug
     ```
 
-5. [Recommended] For faster builds, install [ccache](https://ccache.dev/) and [ninja](https://ninja-build.org/), and then set the generator:
+3. [Recommended] For faster builds, install [ccache](https://ccache.dev/) and [ninja](https://ninja-build.org/), and then set the generator when you build:
+
+    ```sh
+    brew install ccache ninja
+    ```
 
     ```sh
     GEN=ninja make
     ```
 
-The built extension can be found at `PDXearch/build/release/extension/pdxearch/pdxearch.duckdb_extension`.
+@Noorts personally uses
 
-For extension usage instructions, please refer to the [README.md](README.md).
+```sh
+GEN=ninja DISABLE_SANITIZER=1 CC=$HOMEBREW_PREFIX/opt/llvm@18/bin/clang CXX=$HOMEBREW_PREFIX/opt/llvm@18/bin/clang++ EXTRA_CMAKE_ARGS="-DCMAKE_EXPORT_COMPILE_COMMANDS=1" make
+```
 
-### PDXearch variants
+The built extension artifact can be found at `PDXearch/build/release/extension/pdxearch/pdxearch.duckdb_extension`.
+
+For PDXearch extension usage, please see to the [README.md](README.md).
+
+### PDXearch Variants
 
 The extension's internals have been implemented in two variants. These variants
-both implement index creation, and filtered AND non-filtered search.
+both implement index creation, non-filtered search, and filtered search.
 
 **1. Row group**: The first variant creates a separate internal IVF index for each
 row group. This allows the extension to parallelize across row groups, which
@@ -88,15 +168,11 @@ the extension with the following argument to use the global variant:
 EXT_FLAGS="-DPDX_USE_ALTERNATIVE_GLOBAL_VERSION=1" make
 ```
 
-### Miscellaneous commands
+### Clangd Language Server Support
 
-```sh
-make clean
-```
-
-### Clangd language server support
-
-For [clangd](https://open-vsx.org/extension/llvm-vs-code-extensions/vscode-clangd) support in VSCode-based editors you can build the compilation database.
+For
+[clangd](https://open-vsx.org/extension/llvm-vs-code-extensions/vscode-clangd)
+support in VSCode-based editors, ensure you build the compilation database.
 
 Include the following argument in your build command (each time you build):
 
@@ -112,6 +188,32 @@ ln -s ./build/release/compile_commands.json ./
 
 You might have to manually set the clangd executable path in the VSCode clangd extension configuration.
 
+## Clean, Format, Tidy-Check
+
+```sh
+make clean
+```
+
+```sh
+make format
+```
+
+Portable `make format` alternative:
+
+```sh
+uv run --with black --with clang_format==11.0.1 --with cmake-format duckdb/scripts/format.py --all --fix --noconfirm --directories src test
+```
+
+```sh
+make tidy-check
+```
+
+Tidy-check alternative that explicitly uses LLVM 18:
+
+```sh
+make tidy-check TIDY_BINARY=/opt/homebrew/opt/llvm@18/bin/clang-tidy
+```
+
 ## Test
 
 After building the extension you can run the tests. See
@@ -125,38 +227,8 @@ make test
 make test_debug
 ```
 
-## Code quality
+Run one specific test:
 
 ```sh
-make format
-```
-
-```sh
-make tidy-check
-```
-
-## Example Setup
-
-Here we declare a system setup that has successfully built and used the extension.
-
-- Apple M4 Pro
-- macOS Sequoia 15.6.1
-- [LLVM 18](https://formulae.brew.sh/formula/llvm@18#default)
-
-Build:
-
-```sh
-GEN=ninja DISABLE_SANITIZER=1 CC=$HOMEBREW_PREFIX/opt/llvm@18/bin/clang CXX=$HOMEBREW_PREFIX/opt/llvm@18/bin/clang++ EXTRA_CMAKE_ARGS="-DCMAKE_EXPORT_COMPILE_COMMANDS=1" make
-```
-
-Portable `make format` alternative:
-
-```sh
-uv run --with black --with clang_format==11.0.1 --with cmake-format duckdb/scripts/format.py --all --fix --noconfirm --directories src test
-```
-
-`make tidy-check`:
-
-```sh
-make tidy-check TIDY_BINARY=/opt/homebrew/opt/llvm@18/bin/clang-tidy
+./build/release/"/test/unittest" "test/sql/search/index_scan_uncommon_dimensions.test"
 ```
