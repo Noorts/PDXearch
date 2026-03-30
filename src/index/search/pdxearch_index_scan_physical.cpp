@@ -26,7 +26,6 @@ public:
 	    : context(context), op(op), limit(bind_data.limit), index(bind_data.index.Cast<PDXearchIndex>()),
 	      preprocessed_query_embedding(make_uniq_array<float>(index.GetNumDimensions())), search_started(false),
 	      search_completed(false), pdxearch_row_ids(nullptr), pdxearch_row_ids_idx(0) {
-
 		// Preprocess the query embedding.
 		const EmbeddingPreprocessor embedding_preprocessor =
 		    EmbeddingPreprocessor(index.GetNumDimensions(), index.GetRotationMatrix());
@@ -171,8 +170,8 @@ unique_ptr<LocalSourceState> PhysicalPDXearchIndexScan::GetLocalSourceState(Exec
 	return make_uniq<PDXearchScanLocalSourceState>();
 }
 
-SourceResultType PhysicalPDXearchIndexScan::GetData(ExecutionContext &context, DataChunk &output_chunk,
-                                                    OperatorSourceInput &input) const {
+SourceResultType PhysicalPDXearchIndexScan::GetDataInternal(ExecutionContext &context, DataChunk &output_chunk,
+                                                            OperatorSourceInput &input) const {
 	auto &g_state = input.global_state.Cast<PDXearchScanGlobalSourceState>();
 
 	// Trigger parallel search of all row groups.
