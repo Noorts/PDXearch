@@ -16,6 +16,7 @@
     - [Clangd Language Server Support](#clangd-language-server-support)
   - [Clean, Format, Tidy-Check](#clean-format-tidy-check)
   - [Test](#test)
+  - [FAQ](#faq)
 
 
 ## Prerequisites
@@ -232,3 +233,8 @@ Run one specific test:
 ```sh
 ./build/release/"/test/unittest" "test/sql/search/index_scan_uncommon_dimensions.test"
 ```
+
+## FAQ
+
+- Q: I pulled the latest commits and now I run into compiler errors when I build the extension.
+  - A: Did the latest commits include the bump of a submodule? (e.g., DuckDB was updated) If this is the case, then when you run `git status` it will state `"modified: duckdb (new commits)"`. In the root PDXearch directory, run `git submodule update --init --recursive` to ensure your local submodules match the committed versions.
