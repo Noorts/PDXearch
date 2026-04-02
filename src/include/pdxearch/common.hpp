@@ -117,10 +117,34 @@ struct Cluster {
 	      data(new data_t[static_cast<uint64_t>(num_embeddings) * num_dimensions]) {
 	}
 
+	Cluster(Cluster &&other) noexcept
+	    : num_embeddings(other.num_embeddings), num_dimensions(other.num_dimensions), indices(other.indices),
+	      data(other.data) {
+		other.indices = nullptr;
+		other.data = nullptr;
+	}
+
+	Cluster &operator=(Cluster &&other) noexcept {
+		if (this != &other) {
+			assert(num_dimensions == other.num_dimensions);
+			delete[] data;
+			delete[] indices;
+			num_embeddings = other.num_embeddings;
+			indices = other.indices;
+			data = other.data;
+			other.indices = nullptr;
+			other.data = nullptr;
+		}
+		return *this;
+	}
+
 	~Cluster() {
 		delete[] data;
 		delete[] indices;
 	}
+
+	Cluster(const Cluster &) = delete;
+	Cluster &operator=(const Cluster &) = delete;
 
 	uint32_t num_embeddings {};
 	const uint32_t num_dimensions {};
