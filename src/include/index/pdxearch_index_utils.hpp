@@ -17,14 +17,8 @@ namespace duckdb {
 }
 
 [[nodiscard]] inline constexpr uint32_t ComputeNumberOfClusters(const uint32_t num_embeddings) {
-	// Based on:
-	// https://github.com/pgvector/pgvector?tab=readme-ov-file#ivfflat
-
-	if (num_embeddings <= 1000000) {
-		return std::max<uint32_t>(1, std::ceil(num_embeddings / 1000.0));
-	} else {
-		return std::ceil(std::sqrt(num_embeddings));
-	}
+	// Use a 256 embeddings per cluster ratio. Similar to the row group approach.
+	return std::ceil(num_embeddings / 256.0);
 }
 
 // Generate a rotation matrix suitable for PDXearch's ADSampling pruning algorithm.
