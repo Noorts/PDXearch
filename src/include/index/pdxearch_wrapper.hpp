@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 
 #include "pdxearch/common.hpp"
 #include "pdxearch/db_mock/predicate_evaluator.hpp"
@@ -126,6 +127,11 @@ public:
 private:
 	uint32_t num_clusters_per_row_group {};
 	std::vector<PDXRowGroup<Q>> row_groups;
+	// TODO: Reevaluate whether we need this row group initialization guard once we properly support non-full row
+	// groups. This mutex guards row_groups_initialized to detect concurrent or repeated SetUpIndexForRowGroup calls for
+	// the same row group.
+	std::mutex row_group_init_mutex;
+	std::vector<bool> row_groups_initialized;
 
 public:
 	// The number of clusters depends on the number of embeddings in the row group. We have three levels.
@@ -160,6 +166,7 @@ public:
 		    static_cast<idx_t>(std::ceil((float)estimated_cardinality / DEFAULT_ROW_GROUP_SIZE));
 		D_ASSERT(estimated_num_row_groups > 0);
 		row_groups.resize(estimated_num_row_groups);
+		row_groups_initialized.resize(estimated_num_row_groups, false);
 
 		num_clusters_per_row_group = ComputeNumClustersForRowGroup(estimated_cardinality);
 	}
@@ -167,6 +174,20 @@ public:
 	// Initialize the wrapper's state for this row group. This is called once per row group.
 	void SetUpIndexForRowGroup(const row_t *const row_ids, const float *const embeddings, const idx_t num_embeddings,
 	                           const idx_t row_group_id) {
+		{
+			const std::lock_guard<std::mutex> lock(row_group_init_mutex);
+			if (row_groups_initialized[row_group_id]) {
+				throw InternalException(
+				    "Row group %llu is being initialized a second time (n_emb=%llu). This means that the DuckDB "
+				    "physical row groups are not aligned with the expected row group size of %llu. See the limitations "
+				    "section in the README for more details. Use `CALL pragma_storage_info('table_name');` to inspect "
+				    "the row group sizes of your table. All row groups in the table, except the last one, must contain "
+				    "exactly %llu rows. So 122880, 122880, 4000 is allowed, but 122880, 100000, 4000 is not.",
+				    row_group_id, num_embeddings, DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE);
+			}
+			row_groups_initialized[row_group_id] = true;
+		}
+
 		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
 
 		const auto num_dimensions = GetNumDimensions();
