@@ -464,12 +464,14 @@ public:
 			if (plan->children[0]->type == LogicalOperatorType::LOGICAL_PROJECTION) {
 				auto &child = plan->children[0];
 
-				if ( // Non-filtered search
-				    (child->children[0]->type == LogicalOperatorType::LOGICAL_GET &&
-				     child->children[0]->Cast<LogicalGet>().function.name == "pdxearch_index_scan") ||
-				    // Filtered search
+				if (( // Targets non-filtered global.
+				        child->children[0]->type == LogicalOperatorType::LOGICAL_GET &&
+				        child->children[0]->Cast<LogicalGet>().function.name == "pdxearch_index_scan") ||
 				    (child->children[0]->type == LogicalOperatorType::LOGICAL_EXTENSION_OPERATOR &&
-				     child->children[0]->GetName() == "PDXEARCH_INDEX_FILT_SCAN")) {
+				     ( // Targets non-filtered row group.
+				         child->children[0]->GetName() == "PDXEARCH_INDEX_SCAN" ||
+				         // Targets filtered row group and filtered global.
+				         child->children[0]->GetName() == "PDXEARCH_INDEX_FILT_SCAN"))) {
 					auto &parent_projection = plan->Cast<LogicalProjection>();
 					auto &child_projection = child->Cast<LogicalProjection>();
 

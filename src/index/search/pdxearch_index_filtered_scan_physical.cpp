@@ -165,7 +165,7 @@ SinkResultType PhysicalPDXearchIndexFilteredScan::Sink(ExecutionContext &context
 
 		l_sink.row_group_ids_of_row_groups_with_passing_tuples.push_back(l_sink.current_row_group_id);
 
-		// Clear the local state to process the next rowgroup.
+		// Clear the local state to process the next row group.
 		l_sink.current_row_group_passing_rowids.clear();
 	}
 	l_sink.current_row_group_id = row_group_id;
