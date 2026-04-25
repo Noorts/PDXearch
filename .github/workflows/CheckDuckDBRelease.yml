@@ -37,8 +37,11 @@ jobs:
         run: |
           # Pull the most recent releases and pick the first stable vX.Y.Z that
           # is not a draft/prerelease. The /releases/latest endpoint isn't
-          # always reliable for DuckDB, so we filter ourselves.
-          latest=$(gh api repos/duckdb/duckdb/releases --paginate \
+          # always reliable for DuckDB, so we filter ourselves. The first page
+          # always contains the newest release, so no pagination needed (and
+          # paginating would produce a multi-line value that breaks string
+          # comparison downstream).
+          latest=$(gh api 'repos/duckdb/duckdb/releases?per_page=30' \
             --jq '[.[] | select(.draft==false and .prerelease==false) | .tag_name] | map(select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))) | .[0]')
           if [[ -z "$latest" || "$latest" == "null" ]]; then
             echo "no stable release found" >&2
@@ -70,16 +73,22 @@ jobs:
 
           echo "bump=true" >> "$GITHUB_OUTPUT"
 
-      - name: Confirm matching extension-ci-tools tag exists
+      - name: Confirm matching extension-ci-tools ref exists
         if: steps.decide.outputs.bump == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LATEST: ${{ steps.latest.outputs.version }}
         run: |
-          # The bump script requires the same tag on both submodules.
-          if ! gh api "repos/duckdb/extension-ci-tools/git/refs/tags/$LATEST" >/dev/null 2>&1; then
-            echo "Tag $LATEST not yet published on duckdb/extension-ci-tools; will retry on next schedule."
-            exit 78  # neutral-ish: fail this step, but the next run will pick it up.
+          # extension-ci-tools publishes versioned releases as branches, not
+          # tags (unlike duckdb/duckdb). Accept either ref shape so the check
+          # works regardless of which one upstream uses.
+          if gh api "repos/duckdb/extension-ci-tools/git/refs/tags/$LATEST" >/dev/null 2>&1; then
+            echo "Found tag $LATEST on duckdb/extension-ci-tools."
+          elif gh api "repos/duckdb/extension-ci-tools/git/refs/heads/$LATEST" >/dev/null 2>&1; then
+            echo "Found branch $LATEST on duckdb/extension-ci-tools."
+          else
+            echo "Ref $LATEST not yet published on duckdb/extension-ci-tools (checked tags and branches); will retry on next schedule."
+            exit 1
           fi
 
       - name: Skip if branch or PR already exists

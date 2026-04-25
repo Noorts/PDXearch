@@ -48,25 +48,23 @@ jobs:
           BRANCH: ${{ steps.bump.outputs.branch }}
           TITLE: ${{ steps.bump.outputs.commit_message }}
         run: |
+          # extension-ci-tools publishes versions as branches (no Releases
+          # page), so link to the tree view rather than a 404 release URL.
           duckdb_release_url="https://github.com/duckdb/duckdb/releases/tag/${NEW_VERSION}"
-          ci_tools_release_url="https://github.com/duckdb/extension-ci-tools/releases/tag/${NEW_VERSION}"
+          ci_tools_tree_url="https://github.com/duckdb/extension-ci-tools/tree/${NEW_VERSION}"
           compare_url="https://github.com/duckdb/duckdb/compare/${OLD_VERSION}...${NEW_VERSION}"
 
-          body=$(cat <<EOF
-          Automated bump from \`${OLD_VERSION}\` to \`${NEW_VERSION}\`.
-
-          ## Release notes
-
-          - DuckDB ${NEW_VERSION}: ${duckdb_release_url}
-          - extension-ci-tools ${NEW_VERSION}: ${ci_tools_release_url}
-          - Full changelog: ${compare_url}
-
-          Triggered via the Bump DuckDB workflow_dispatch.
-          EOF
-          )
+          {
+            printf 'Automated bump from `%s` to `%s`.\n\n' "$OLD_VERSION" "$NEW_VERSION"
+            printf '## Release notes\n\n'
+            printf -- '- DuckDB %s: %s\n' "$NEW_VERSION" "$duckdb_release_url"
+            printf -- '- extension-ci-tools %s: %s\n' "$NEW_VERSION" "$ci_tools_tree_url"
+            printf -- '- Full changelog: %s\n\n' "$compare_url"
+            printf 'Triggered via the Bump DuckDB workflow_dispatch.\n'
+          } > pr_body.md
 
           gh pr create \
             --base main \
             --head "${BRANCH}" \
             --title "${TITLE}" \
-            --body "${body}"
+            --body-file pr_body.md
