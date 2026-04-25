@@ -1,0 +1,72 @@
+name: Bump DuckDB
+
+on:
+  workflow_dispatch:
+    inputs:
+      new_version:
+        description: "New DuckDB version tag (e.g. v1.5.2)"
+        required: true
+        type: string
+      open_pr:
+        description: "Open a PR after pushing the branch"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+          # Use a token with push + PR scope; falls back to GITHUB_TOKEN.
+          token: ${{ secrets.BUMP_DUCKDB_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Run bump script
+        id: bump
+        run: |
+          python3 scripts/bump-duckdb.py "${{ inputs.new_version }}" --push
+
+      - name: Open pull request
+        if: ${{ inputs.open_pr }}
+        env:
+          GH_TOKEN: ${{ secrets.BUMP_DUCKDB_TOKEN || secrets.GITHUB_TOKEN }}
+          OLD_VERSION: ${{ steps.bump.outputs.old_version }}
+          NEW_VERSION: ${{ steps.bump.outputs.new_version }}
+          BRANCH: ${{ steps.bump.outputs.branch }}
+          TITLE: ${{ steps.bump.outputs.commit_message }}
+        run: |
+          duckdb_release_url="https://github.com/duckdb/duckdb/releases/tag/${NEW_VERSION}"
+          ci_tools_release_url="https://github.com/duckdb/extension-ci-tools/releases/tag/${NEW_VERSION}"
+          compare_url="https://github.com/duckdb/duckdb/compare/${OLD_VERSION}...${NEW_VERSION}"
+
+          body=$(cat <<EOF
+          Automated bump from \`${OLD_VERSION}\` to \`${NEW_VERSION}\`.
+
+          ## Release notes
+
+          - DuckDB ${NEW_VERSION}: ${duckdb_release_url}
+          - extension-ci-tools ${NEW_VERSION}: ${ci_tools_release_url}
+          - Full changelog: ${compare_url}
+
+          Triggered via the Bump DuckDB workflow_dispatch.
+          EOF
+          )
+
+          gh pr create \
+            --base main \
+            --head "${BRANCH}" \
+            --title "${TITLE}" \
+            --body "${body}"

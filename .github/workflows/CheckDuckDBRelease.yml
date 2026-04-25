@@ -1,0 +1,117 @@
+name: Check DuckDB Release
+
+on:
+  schedule:
+    # Daily at 06:00 UTC.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+  pull-requests: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect currently pinned DuckDB version
+        id: current
+        run: |
+          current=$(grep -m1 -oE '_extension_distribution\.yml@v[0-9]+\.[0-9]+\.[0-9]+' \
+            .github/workflows/MainDistributionPipeline.yml | sed 's/.*@//')
+          if [[ -z "$current" ]]; then
+            echo "could not detect current version" >&2
+            exit 1
+          fi
+          echo "version=$current" >> "$GITHUB_OUTPUT"
+          echo "Currently pinned: $current"
+
+      - name: Find latest stable DuckDB release
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Pull the most recent releases and pick the first stable vX.Y.Z that
+          # is not a draft/prerelease. The /releases/latest endpoint isn't
+          # always reliable for DuckDB, so we filter ourselves.
+          latest=$(gh api repos/duckdb/duckdb/releases --paginate \
+            --jq '[.[] | select(.draft==false and .prerelease==false) | .tag_name] | map(select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))) | .[0]')
+          if [[ -z "$latest" || "$latest" == "null" ]]; then
+            echo "no stable release found" >&2
+            exit 1
+          fi
+          echo "version=$latest" >> "$GITHUB_OUTPUT"
+          echo "Latest stable: $latest"
+
+      - name: Check whether a bump is needed
+        id: decide
+        env:
+          CURRENT: ${{ steps.current.outputs.version }}
+          LATEST: ${{ steps.latest.outputs.version }}
+        run: |
+          if [[ "$CURRENT" == "$LATEST" ]]; then
+            echo "Already on the latest stable release."
+            echo "bump=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Sort the two versions: if CURRENT sorts after LATEST, we are ahead
+          # (e.g. running a release candidate locally) and should not bump.
+          newest=$(printf '%s\n%s\n' "$CURRENT" "$LATEST" | sort -V | tail -n1)
+          if [[ "$newest" != "$LATEST" ]]; then
+            echo "Currently pinned ($CURRENT) is newer than latest stable ($LATEST); skipping."
+            echo "bump=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "bump=true" >> "$GITHUB_OUTPUT"
+
+      - name: Confirm matching extension-ci-tools tag exists
+        if: steps.decide.outputs.bump == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LATEST: ${{ steps.latest.outputs.version }}
+        run: |
+          # The bump script requires the same tag on both submodules.
+          if ! gh api "repos/duckdb/extension-ci-tools/git/refs/tags/$LATEST" >/dev/null 2>&1; then
+            echo "Tag $LATEST not yet published on duckdb/extension-ci-tools; will retry on next schedule."
+            exit 78  # neutral-ish: fail this step, but the next run will pick it up.
+          fi
+
+      - name: Skip if branch or PR already exists
+        if: steps.decide.outputs.bump == 'true'
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LATEST: ${{ steps.latest.outputs.version }}
+        run: |
+          branch="feature/update-duckdb-to-$LATEST"
+          if gh api "repos/${{ github.repository }}/branches/$branch" >/dev/null 2>&1; then
+            echo "Branch $branch already exists; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Also skip if any open PR mentions this version in its title.
+          hits=$(gh pr list --state open --search "in:title \"bump to DuckDB $LATEST\"" --json number --jq 'length')
+          if [[ "$hits" -gt 0 ]]; then
+            echo "An open PR for $LATEST already exists; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch bump workflow
+        if: steps.decide.outputs.bump == 'true' && steps.existing.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.BUMP_DUCKDB_TOKEN || secrets.GITHUB_TOKEN }}
+          LATEST: ${{ steps.latest.outputs.version }}
+        run: |
+          gh workflow run BumpDuckDB.yml \
+            --ref "${{ github.ref_name }}" \
+            -f new_version="$LATEST" \
+            -f open_pr=true
+          echo "Dispatched BumpDuckDB.yml for $LATEST"
