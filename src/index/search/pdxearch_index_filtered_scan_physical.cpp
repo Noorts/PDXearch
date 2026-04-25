@@ -42,10 +42,12 @@ public:
 		}
 
 		auto n_probe = index.GetEffectiveNProbe(context);
-		// Assumption: all row groups have the same number of clusters.
-		auto num_clusters_per_row_group = index.GetNumClustersPerRowGroup();
+		// The cluster count varies per row group, but the iteration loop uses a single value across all row groups. We
+		// use the count for a full row group as the upper bound: for full row groups it matches exactly, and for
+		// smaller row groups (e.g., the last one) the per-row-group searcher clamps internally.
+		const idx_t num_clusters_for_full_row_group = PDXearchIndex::GetNumClustersForFullRowGroup();
 		partitions_to_probe_per_row_group_on_first_iteration =
-		    (n_probe == 0 || n_probe > num_clusters_per_row_group) ? num_clusters_per_row_group : n_probe;
+		    (n_probe == 0 || n_probe > num_clusters_for_full_row_group) ? num_clusters_for_full_row_group : n_probe;
 
 		row_group_ids_of_row_groups_with_passing_tuples.reserve(index.GetNumRowGroups());
 	}
@@ -93,16 +95,18 @@ public:
 // results to return, then this physical operator will iteratively probe the clusters until all have been visited. Also
 // see `num_probe_iterations_performed_thus_far`.
 constexpr idx_t PhysicalFilteredScanGlobalSinkState::GetMaximumNumberOfProbeIterations() {
-	const idx_t total_num_clusters = index.GetNumClustersPerRowGroup();
+	// Use the full-row-group cluster count as an upper bound. For smaller row groups the per-row-group searcher clamps,
+	// so this may schedule a few unnecessary iterations for those, but never under-probes.
+	const idx_t max_num_clusters_per_row_group = PDXearchIndex::GetNumClustersForFullRowGroup();
 
 	const bool the_first_iteration_probes_all_clusters =
-	    partitions_to_probe_per_row_group_on_first_iteration >= total_num_clusters;
+	    partitions_to_probe_per_row_group_on_first_iteration >= max_num_clusters_per_row_group;
 	if (the_first_iteration_probes_all_clusters) {
 		return 1;
 	}
 
 	const idx_t num_clusters_remaining_to_probe_after_first_iteration =
-	    total_num_clusters - partitions_to_probe_per_row_group_on_first_iteration;
+	    max_num_clusters_per_row_group - partitions_to_probe_per_row_group_on_first_iteration;
 	return 1 + static_cast<idx_t>(std::ceil(static_cast<float>(num_clusters_remaining_to_probe_after_first_iteration) /
 	                                        PARTITIONS_TO_PROBE_PER_ROW_GROUP_PER_FOLLOW_UP_ITERATION));
 }
@@ -389,7 +393,7 @@ InsertionOrderPreservingMap<string> PhysicalPDXearchIndexFilteredScan::ParamsToS
 	InsertionOrderPreservingMap<string> result;
 	result["Table"] = bind_data->table.name;
 	result["PDXearch Index"] = bind_data->index.GetIndexName();
-	result["Total Clusters"] = StringUtil::Format("%zu", index.GetNumClustersPerRowGroup() * index.GetNumRowGroups());
+	result["Total Clusters"] = StringUtil::Format("%zu", index.GetTotalNumClusters());
 	result["Row Groups"] = StringUtil::Format("%zu", index.GetNumRowGroups());
 	const idx_t index_in_memory_size = bind_data->index.Cast<BoundIndex>().GetInMemorySize();
 	result["Index Size"] = ConvertBytesToHumanReadableString(index_in_memory_size);

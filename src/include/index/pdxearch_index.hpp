@@ -129,11 +129,18 @@ public:
 	 * Getters
 	 ******************************************************************/
 
-	idx_t GetNumClustersPerRowGroup() const {
+	// Total cluster count summed across all (initialized) row groups. Used for EXPLAIN output.
+	idx_t GetTotalNumClusters() const {
 		if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
-			return static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())->GetNumClustersPerRowGroup();
+			return static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())->GetTotalNumClusters();
 		}
-		return static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())->GetNumClustersPerRowGroup();
+		return static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())->GetTotalNumClusters();
+	}
+
+	// Upper bound on the per-row-group cluster count, computed from a full row group. Useful for sizing scan-wide
+	// quantities that must apply uniformly across row groups (the searcher clamps to each row group's actual count).
+	static constexpr idx_t GetNumClustersForFullRowGroup() {
+		return PDXearchWrapperF32::ComputeNumClustersForRowGroup(DEFAULT_ROW_GROUP_SIZE);
 	}
 
 	idx_t GetNumRowGroups() const {

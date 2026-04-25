@@ -125,7 +125,6 @@ public:
 	using embedding_storage_t = PDX::pdx_data_t<Q>;
 
 private:
-	uint32_t num_clusters_per_row_group {};
 	std::vector<PDXRowGroup<Q>> row_groups;
 	// TODO: Reevaluate whether we need this row group initialization guard once we properly support non-full row
 	// groups. This mutex guards row_groups_initialized to detect concurrent or repeated SetUpIndexForRowGroup calls for
@@ -167,8 +166,6 @@ public:
 		D_ASSERT(estimated_num_row_groups > 0);
 		row_groups.resize(estimated_num_row_groups);
 		row_groups_initialized.resize(estimated_num_row_groups, false);
-
-		num_clusters_per_row_group = ComputeNumClustersForRowGroup(estimated_cardinality);
 	}
 
 	// Initialize the wrapper's state for this row group. This is called once per row group.
@@ -190,12 +187,13 @@ public:
 
 		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
 
+		const auto num_clusters = ComputeNumClustersForRowGroup(num_embeddings);
 		const auto num_dimensions = GetNumDimensions();
 		// Additional constraints on the number of dimensions are enforced in `pdxearch_index_plan.cpp`.
 		D_ASSERT(num_dimensions > 0);
 		D_ASSERT(num_embeddings > 0);
-		D_ASSERT(num_clusters_per_row_group > 0);
-		D_ASSERT(num_embeddings >= num_clusters_per_row_group);
+		D_ASSERT(num_clusters > 0);
+		D_ASSERT(num_embeddings >= num_clusters);
 
 		float quantization_base = 0.0f;
 		float quantization_scale = 1.0f;
@@ -204,17 +202,17 @@ public:
 			    embeddings, static_cast<size_t>(num_embeddings) * num_dimensions);
 			quantization_base = params.quantization_base;
 			quantization_scale = params.quantization_scale;
-			row_group.index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters_per_row_group,
+			row_group.index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters,
 			                                                 IsNormalized(), quantization_scale, quantization_base);
 		} else {
-			row_group.index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters_per_row_group,
-			                                                 IsNormalized());
+			row_group.index =
+			    make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters, IsNormalized());
 		}
 		row_group.pruner = make_uniq<PDX::ADSamplingPruner<Q>>(num_dimensions, rotation_matrix.get());
 
 		// Compute K-means centroids and embedding-to-centroid assignment (always on float embeddings).
-		KMeansResult kmeans_result = ComputeKMeans(embeddings, num_embeddings, num_dimensions,
-		                                           num_clusters_per_row_group, GetDistanceMetric(), GetSeed());
+		KMeansResult kmeans_result =
+		    ComputeKMeans(embeddings, num_embeddings, num_dimensions, num_clusters, GetDistanceMetric(), GetSeed());
 
 		// Store centroids.
 		row_group.index->centroids = std::move(kmeans_result.centroids);
@@ -223,14 +221,14 @@ public:
 		// StoreClusterEmbeddings, the result of which is persistently stored in the index. The buffer is reused across
 		// clusters. For F32: buffer is float. For U8: buffer is uint8_t (quantized).
 		size_t max_cluster_size = 0;
-		for (size_t i = 0; i < num_clusters_per_row_group; i++) {
+		for (size_t i = 0; i < num_clusters; i++) {
 			max_cluster_size = std::max(max_cluster_size, kmeans_result.assignments[i].size());
 		}
 		auto tmp_cluster_embeddings =
 		    std::make_unique<embedding_storage_t[]>(static_cast<uint64_t>(max_cluster_size * num_dimensions));
 
 		// Set up the IVF clusters' metadata and store the embeddings.
-		for (size_t cluster_idx = 0; cluster_idx < num_clusters_per_row_group; cluster_idx++) {
+		for (size_t cluster_idx = 0; cluster_idx < num_clusters; cluster_idx++) {
 			const auto cluster_size = kmeans_result.assignments[cluster_idx].size();
 			auto &cluster = row_group.index->clusters.emplace_back(cluster_size, num_dimensions);
 
@@ -304,9 +302,16 @@ public:
 		return predicate_evaluator;
 	}
 
-	uint32_t GetNumClustersPerRowGroup() const {
-		return num_clusters_per_row_group;
+	idx_t GetTotalNumClusters() const {
+		idx_t total = 0;
+		for (const auto &row_group : row_groups) {
+			if (row_group.index) {
+				total += row_group.index->num_clusters;
+			}
+		}
+		return total;
 	}
+
 	idx_t GetNumRowGroups() const {
 		return row_groups.size();
 	}
