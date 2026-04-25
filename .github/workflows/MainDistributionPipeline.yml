@@ -25,10 +25,9 @@ jobs:
 
   code-quality-check:
     name: Code Quality Check
-    uses: noorts/extension-ci-tools/.github/workflows/_extension_code_quality.yml@fix-tidy-check-vcpkg
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v1.5.1
     with:
       duckdb_version: v1.5.1
-      ci_tools_version: fix-tidy-check-vcpkg
-      override_ci_tools_repository: noorts/extension-ci-tools
+      ci_tools_version: v1.5.1
       extension_name: pdxearch
       format_checks: 'format'
