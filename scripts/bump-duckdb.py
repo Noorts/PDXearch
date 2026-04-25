@@ -69,10 +69,17 @@ def detect_current_version() -> str:
     return m.group(1)  # type: ignore[union-attr]
 
 
-def remote_tag_exists(submodule: Path, tag: str) -> bool:
+def remote_ref_exists(submodule: Path, ref: str) -> bool:
+    """Return True if `ref` exists upstream as either a tag or a branch.
+
+    DuckDB publishes versioned releases as tags; extension-ci-tools publishes
+    them as branches with the same name (e.g. `v1.5.2`). Accept either."""
     remote_url = git_out(["config", "--get", "remote.origin.url"], submodule)
     result = run(
-        ["git", "ls-remote", "--tags", remote_url, f"refs/tags/{tag}"],
+        [
+            "git", "ls-remote", remote_url,
+            f"refs/tags/{ref}", f"refs/heads/{ref}",
+        ],
         capture=True,
         check=False,
     )
@@ -85,7 +92,19 @@ def update_submodule(path: str, new_version: str) -> None:
         die(f"submodule path does not exist: {path}")
 
     logger.info(f"checking out {new_version} in {path}")
-    run(["git", "checkout", new_version], cwd=submodule)
+    # Try the bare ref first (works for tags and local branches); fall back to
+    # the remote-tracking branch in detached-HEAD mode for repos like
+    # extension-ci-tools that publish versions as branches.
+    result = run(
+        ["git", "checkout", new_version],
+        cwd=submodule, check=False, capture=True,
+    )
+    if result.returncode != 0:
+        run(
+            ["git", "-c", "advice.detachedHead=false",
+             "checkout", f"origin/{new_version}"],
+            cwd=submodule,
+        )
     run(["git", "add", path], cwd=REPO_ROOT)
 
 
@@ -187,12 +206,14 @@ def main() -> int:
     # publishes the tag is a clean redo.
     for path in ("duckdb", "extension-ci-tools"):
         submodule = REPO_ROOT / path
-        logger.info(f"fetching tags for {path}")
+        logger.info(f"fetching refs for {path}")
         run(["git", "fetch", "--tags", "origin"], cwd=submodule)
-        if not remote_tag_exists(submodule, new_version):
+        run(["git", "fetch", "origin", new_version], cwd=submodule, check=False)
+        if not remote_ref_exists(submodule, new_version):
             die(
-                f"tag {new_version} is not available on the {path} remote yet — "
-                "wait for upstream to publish it, then rerun"
+                f"ref {new_version} is not available on the {path} remote yet "
+                "(checked tags and branches) — wait for upstream to publish "
+                "it, then rerun"
             )
 
     if not args.no_commit:
