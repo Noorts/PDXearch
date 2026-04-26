@@ -4,6 +4,7 @@
 #include "index/pdxearch_index_utils.hpp"
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
 #include "duckdb/storage/data_table.hpp"
+#include "duckdb/storage/storage_lock.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
 #include "duckdb/transaction/local_storage.hpp"
 #include "duckdb/parallel/executor_task.hpp"
@@ -23,7 +24,8 @@ public:
 	PDXearchScanGlobalSourceState(ClientContext &context, const PhysicalPDXearchIndexScan &op,
 	                              const PDXearchIndexScanBindData &bind_data,
 	                              const vector<ColumnIndex> &operator_column_ids)
-	    : context(context), op(op), limit(bind_data.limit), index(bind_data.index.Cast<PDXearchIndex>()),
+	    : search_lock(bind_data.index.Cast<PDXearchIndex>().TakeSearchLock()), context(context), op(op),
+	      limit(bind_data.limit), index(bind_data.index.Cast<PDXearchIndex>()),
 	      preprocessed_query_embedding(make_uniq_array<float>(index.GetNumDimensions())), search_started(false),
 	      search_completed(false), pdxearch_row_ids(nullptr), pdxearch_row_ids_idx(0) {
 		// Preprocess the query embedding.
@@ -65,6 +67,12 @@ public:
 		auto &local_storage = LocalStorage::Get(context, bind_data.table.catalog);
 		local_storage.InitializeScan(bind_data.table.GetStorage(), local_storage_state.local_state, nullptr);
 	}
+
+	// Held for the duration of execution to serialize searches against index
+	// maintenance (and against other searches). Declared first so it is
+	// constructed first and destroyed last, ensuring the lock is held while all
+	// other members (which reference index state) are torn down.
+	unique_ptr<StorageLockKey> search_lock;
 
 	ClientContext &context;
 	const PhysicalPDXearchIndexScan &op;

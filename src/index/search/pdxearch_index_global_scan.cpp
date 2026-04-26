@@ -1,3 +1,4 @@
+#include "duckdb/storage/storage_lock.hpp"
 #include "duckdb/storage/table/scan_state.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
 #include "duckdb/transaction/local_storage.hpp"
@@ -18,6 +19,12 @@ BindInfo PDXearchIndexScanBindInfo(const optional_ptr<FunctionData> bind_data_p)
 }
 
 struct PDXearchIndexScanGlobalState : public GlobalTableFunctionState {
+	// Held for the duration of the scan to serialize searches against index
+	// maintenance (and against other searches). Declared first so it is
+	// constructed first and destroyed last, ensuring the lock is held while all
+	// other members (which reference index state) are torn down.
+	unique_ptr<StorageLockKey> search_lock;
+
 	ColumnFetchState fetch_state;
 	TableScanState local_storage_state;
 	vector<StorageIndex> column_ids;
@@ -31,6 +38,8 @@ static unique_ptr<GlobalTableFunctionState> PDXearchIndexScanInitGlobal(ClientCo
 	auto &bind_data = input.bind_data->Cast<PDXearchIndexScanBindData>();
 
 	auto result = make_uniq<PDXearchIndexScanGlobalState>();
+
+	result->search_lock = bind_data.index.Cast<PDXearchIndex>().TakeSearchLock();
 
 	// Set up the scan state for the local storage
 	auto &local_storage = LocalStorage::Get(context, bind_data.table.catalog);

@@ -3,6 +3,7 @@
 #include "index/pdxearch_index.hpp"
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
 #include "duckdb/storage/data_table.hpp"
+#include "duckdb/storage/storage_lock.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
 #include "duckdb/transaction/local_storage.hpp"
 #include "duckdb/parallel/base_pipeline_event.hpp"
@@ -27,7 +28,8 @@ class PhysicalFilteredScanGlobalSinkState : public GlobalSinkState {
 public:
 	PhysicalFilteredScanGlobalSinkState(ClientContext &context, const PhysicalPDXearchIndexFilteredScan &op,
 	                                    const PDXearchIndexPhysicalScanBindData &bind_data)
-	    : context(context), op(op), limit(bind_data.limit), index(bind_data.index.Cast<PDXearchIndex>()),
+	    : search_lock(bind_data.index.Cast<PDXearchIndex>().TakeSearchLock()), context(context), op(op),
+	      limit(bind_data.limit), index(bind_data.index.Cast<PDXearchIndex>()),
 	      preprocessed_query_embedding(make_uniq_array<float>(index.GetNumDimensions())), pdxearch_row_ids(nullptr) {
 		// Preprocess the query embedding.
 		EmbeddingPreprocessor embedding_preprocessor(index.GetNumDimensions(), index.GetRotationMatrix());
@@ -51,6 +53,12 @@ public:
 
 		row_group_ids_of_row_groups_with_passing_tuples.reserve(index.GetNumRowGroups());
 	}
+
+	// Held for the duration of execution to serialize searches against index
+	// maintenance (and against other searches). Declared first so it is
+	// constructed first and destroyed last, ensuring the lock is held while all
+	// other members (which reference index state) are torn down.
+	unique_ptr<StorageLockKey> search_lock;
 
 	const ClientContext &context;
 	const PhysicalPDXearchIndexFilteredScan &op;
