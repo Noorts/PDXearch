@@ -78,7 +78,7 @@ official VSS extension ([VSS docs](https://duckdb.org/docs/stable/core_extension
     INSERT INTO t1 (id, embedding) SELECT i as id, repeat([i], 512) FROM range(20000) t(i);
     ```
 
-4. Create the PDXearch index to speed up vector similarity search queries. Optionally, configure the index (e.g., the `metric` option). For all options see the [configuration](### Configuration) section.
+4. Create the PDXearch index to speed up vector similarity search queries. Optionally, configure the index (e.g., the `metric` option). For all options see the [configuration](#configuration) section.
 
     ```sql
     CREATE INDEX t1_idx ON t1 USING PDXEARCH (embedding) WITH (metric = 'l2sq');
