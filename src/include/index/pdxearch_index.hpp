@@ -4,6 +4,7 @@
 #include "duckdb/execution/index/index_pointer.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/optimizer/matcher/expression_matcher.hpp"
+#include "duckdb/storage/storage_lock.hpp"
 #include "duckdb/storage/table/scan_state.hpp"
 
 #include "pdxearch/common.hpp"
@@ -34,6 +35,15 @@ private:
 	unique_ptr<ExpressionMatcher> function_matcher;
 	IndexPointer root_block_ptr;
 
+	// A readers-writers (shared-exclusive; exclusive prioritized) lock to
+	// enforce a "one reader (exclusive) - one maintenance operation at a
+	// time (exclusive)" access pattern. DuckDB's IndexLock is also acquired
+	// implicitly in BoundIndex, but this is insufficient to guard 1+ index
+	// scans from the maintenance operations. Hence, we add this rwlock.
+	//
+	// See the pull request this was introduced in for more context.
+	StorageLock rwlock;
+
 public:
 	PDXearchIndex(const string &name, IndexConstraintType index_constraint_type, const vector<column_t> &column_ids,
 	              TableIOManager &table_io_manager, const vector<unique_ptr<Expression>> &unbound_expressions,
@@ -45,6 +55,8 @@ public:
 	/******************************************************************
 	 * Index creation and search methods specific to the parallel implementation
 	 ******************************************************************/
+
+	unique_ptr<StorageLockKey> TakeSearchLock();
 
 	void SetUpIndexForRowGroup(const row_t *row_ids, const float *embeddings, idx_t num_embeddings, idx_t row_group_id);
 

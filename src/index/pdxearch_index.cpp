@@ -87,6 +87,10 @@ PDXearchIndex::PDXearchIndex(const string &name, IndexConstraintType index_const
  * Index creation and search methods specific to the parallel implementation
  ******************************************************************/
 
+unique_ptr<StorageLockKey> PDXearchIndex::TakeSearchLock() {
+	return rwlock.GetExclusiveLock();
+}
+
 void PDXearchIndex::SetUpIndexForRowGroup(const row_t *const row_ids, const float *const vectors,
                                           const idx_t num_vectors, const idx_t row_group_id) {
 	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
@@ -211,18 +215,31 @@ PDXearchIndex::GlobalFilteredSearch(const float *const query_embedding, const id
  ******************************************************************/
 
 ErrorData PDXearchIndex::Append(IndexLock &lock, DataChunk &entries, Vector &row_ids) {
-	throw NotImplementedException("PDXearchIndex::Append() not implemented");
+	// Execute all column expressions before inserting the data chunk.
+	DataChunk expr_chunk;
+	expr_chunk.Initialize(Allocator::DefaultAllocator(), logical_types);
+	ExecuteExpressions(entries, expr_chunk);
+	// Now insert the data chunk.
+	return Insert(lock, expr_chunk, row_ids);
 }
 
 ErrorData PDXearchIndex::Insert(IndexLock &lock, DataChunk &data, Vector &row_ids) {
+	auto _lock = rwlock.GetExclusiveLock();
+
 	throw NotImplementedException("PDXearchIndex::Insert() not implemented");
 }
 
 void PDXearchIndex::Delete(IndexLock &lock, DataChunk &entries, Vector &row_ids) {
+	auto _lock = rwlock.GetExclusiveLock();
+
 	throw NotImplementedException("PDXearchIndex::Delete() not implemented");
 }
 
+// DROP INDEX.
 void PDXearchIndex::CommitDrop(IndexLock &lock) {
+	auto _lock = rwlock.GetExclusiveLock();
+
+	// TODO: Implement when we implement persistence.
 }
 
 bool PDXearchIndex::MergeIndexes(IndexLock &state, BoundIndex &other_index) {
@@ -245,6 +262,8 @@ void PDXearchIndex::VerifyAllocations(IndexLock &state) {
 }
 
 idx_t PDXearchIndex::GetInMemorySize(IndexLock &state) {
+	auto _lock = rwlock.GetSharedLock();
+
 	return pdxearch_wrapper->GetInMemorySizeInBytes();
 }
 
@@ -273,6 +292,8 @@ IndexStorageInfo PDXearchIndex::SerializeToDisk(QueryContext context,
 	// For serialization_options see:
 	// https://github.com/duckdb/duckdb/blob/32afee3e788394973ce4df4fcae7610832d5550a/src/storage/write_ahead_log.cpp#L374
 
+	PersistToDisk();
+
 	IndexStorageInfo info(name);
 	case_insensitive_map_t<Value> options;
 	options.emplace("testDisk", Value::INTEGER(12));
@@ -285,6 +306,8 @@ IndexStorageInfo PDXearchIndex::SerializeToDisk(QueryContext context,
 }
 
 IndexStorageInfo PDXearchIndex::SerializeToWAL(const case_insensitive_map_t<Value> &serialization_options) {
+	PersistToDisk();
+
 	IndexStorageInfo info(name);
 	case_insensitive_map_t<Value> options;
 	options.emplace("testWAL", Value::INTEGER(12));
@@ -298,6 +321,7 @@ IndexStorageInfo PDXearchIndex::SerializeToWAL(const case_insensitive_map_t<Valu
 
 // TODO: Implement persistence.
 void PDXearchIndex::PersistToDisk() {
+	auto _lock = rwlock.GetExclusiveLock();
 }
 
 /******************************************************************

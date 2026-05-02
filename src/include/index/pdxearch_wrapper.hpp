@@ -27,7 +27,7 @@ public:
 private:
 	const uint32_t num_dimensions;
 	// Whether the embeddings (both the query embeddings and those stored in the
-	// index) are normalized. The PDXearch kernel only implements Euclidian
+	// index) are normalized. The PDXearch kernel only implements Euclidean
 	// distance (L2SQ). To compute the cosine and inner product distances we
 	// normalize and then use L2SQ.
 	const bool is_normalized;

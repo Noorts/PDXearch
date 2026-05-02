@@ -2,6 +2,7 @@
 #include "index/pdxearch_index.hpp"
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
 #include "duckdb/storage/data_table.hpp"
+#include "duckdb/storage/storage_lock.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
 #include "duckdb/transaction/local_storage.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -10,8 +11,15 @@ namespace duckdb {
 
 class PhysicalGlobalFilteredScanGlobalSinkState : public GlobalSinkState {
 public:
-	PhysicalGlobalFilteredScanGlobalSinkState() : collected_vectors(), pdxearch_row_ids(nullptr) {
+	explicit PhysicalGlobalFilteredScanGlobalSinkState(PDXearchIndex &index)
+	    : search_lock(index.TakeSearchLock()), collected_vectors(), pdxearch_row_ids(nullptr) {
 	}
+
+	// Held for the duration of execution to serialize searches against index
+	// maintenance (and against other searches). Declared first so it is
+	// constructed first and destroyed last, ensuring the lock is held while all
+	// other members (which reference index state) are torn down.
+	unique_ptr<StorageLockKey> search_lock;
 
 	std::vector<std::pair<Vector, idx_t>> collected_vectors;
 	std::unique_ptr<std::vector<row_t>> pdxearch_row_ids;
@@ -56,7 +64,7 @@ PhysicalGlobalPDXearchIndexFilteredScan::PhysicalGlobalPDXearchIndexFilteredScan
 // ------------------------------
 
 unique_ptr<GlobalSinkState> PhysicalGlobalPDXearchIndexFilteredScan::GetGlobalSinkState(ClientContext &context) const {
-	return make_uniq<PhysicalGlobalFilteredScanGlobalSinkState>();
+	return make_uniq<PhysicalGlobalFilteredScanGlobalSinkState>(bind_data->index.Cast<PDXearchIndex>());
 }
 
 unique_ptr<LocalSinkState> PhysicalGlobalPDXearchIndexFilteredScan::GetLocalSinkState(ExecutionContext &context) const {
