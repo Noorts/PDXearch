@@ -16,19 +16,6 @@ namespace duckdb {
 	return row_id / DEFAULT_ROW_GROUP_SIZE;
 }
 
-[[nodiscard]] inline constexpr uint32_t ComputeNumberOfClusters(const uint32_t num_embeddings) {
-	// Based on:
-	// https://github.com/cwida/PDX/blob/91618e01e574e594e27c71abfe3b1d5094657d53/benchmarks/python_scripts/setup_core_index.py#L17-L22
-
-	if (num_embeddings < 500000) {
-		return std::ceil(2 * std::sqrt(num_embeddings));
-	} else if (num_embeddings < 2500000) {
-		return std::ceil(4 * std::sqrt(num_embeddings));
-	} else {
-		return std::ceil(8 * std::sqrt(num_embeddings));
-	}
-}
-
 // Generate a rotation matrix suitable for PDXearch's ADSampling pruning algorithm.
 //
 // Based on https://github.com/cwida/PDX/blob/main/python/pdxearch/preprocessors.py#L39

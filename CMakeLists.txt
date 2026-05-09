@@ -11,11 +11,6 @@ include_directories(src/include)
 set(EXTENSION_SOURCES src/pdxearch_extension.cpp)
 add_subdirectory(src/index)
 
-# Add `EXT_FLAGS="-DPDX_USE_ALTERNATIVE_GLOBAL_VERSION=1"` to an extension build command to enable.
-if(PDX_USE_ALTERNATIVE_GLOBAL_VERSION)
-  add_compile_definitions(PDX_USE_ALTERNATIVE_GLOBAL_VERSION)
-endif()
-
 # DuckDB's extension distribution supports vcpkg. As such, dependencies can be added in ./vcpkg.json and then
 # used in cmake with find_package. Feel free to remove or replace with other dependencies.
 # Note that it should also be removed from vcpkg.json to prevent needlessly installing it..
