@@ -61,21 +61,11 @@ PDXearchIndex::PDXearchIndex(const string &name, IndexConstraintType index_const
 	if (quantization == PDX::Quantization::F32) {
 		D_ASSERT(ArrayType::GetChildType(embedding_type).id() == LogicalTypeId::FLOAT);
 
-#ifndef PDX_USE_ALTERNATIVE_GLOBAL_VERSION
 		pdxearch_wrapper =
 		    make_uniq<PDXearchWrapperF32>(dist_metric, num_dimensions, n_probe, seed, estimated_cardinality);
-#else
-		pdxearch_wrapper =
-		    make_uniq<PDXearchWrapperGlobalF32>(dist_metric, num_dimensions, n_probe, seed, estimated_cardinality);
-#endif
 	} else if (quantization == PDX::Quantization::U8) {
-#ifndef PDX_USE_ALTERNATIVE_GLOBAL_VERSION
 		pdxearch_wrapper =
 		    make_uniq<PDXearchWrapperU8>(dist_metric, num_dimensions, n_probe, seed, estimated_cardinality);
-#else
-		pdxearch_wrapper =
-		    make_uniq<PDXearchWrapperGlobalU8>(dist_metric, num_dimensions, n_probe, seed, estimated_cardinality);
-#endif
 	} else {
 		throw InternalException("Unsupported quantization: %s", quantization);
 	}
@@ -144,70 +134,6 @@ void PDXearchIndex::FilteredSearchRowGroup(const idx_t row_group_id, const idx_t
 		static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
 		    ->FilteredSearchRowGroup(row_group_id, num_clusters_to_try_to_probe);
 	}
-}
-
-/******************************************************************
- * Index creation and search methods specific to the global implementation
- ******************************************************************/
-
-void PDXearchIndex::SetUpGlobalIndex(const row_t *const row_ids, const float *const embeddings,
-                                     const idx_t num_embeddings) {
-	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
-		static_cast<PDXearchWrapperGlobalU8 *>(pdxearch_wrapper.get())
-		    ->SetUpGlobalIndex(row_ids, embeddings, num_embeddings);
-	} else {
-		static_cast<PDXearchWrapperGlobalF32 *>(pdxearch_wrapper.get())
-		    ->SetUpGlobalIndex(row_ids, embeddings, num_embeddings);
-	}
-}
-
-struct PDXearchIndexScanState : public IndexScanState {
-	idx_t current_row = 0;
-	std::unique_ptr<std::vector<row_t>> row_ids;
-};
-
-unique_ptr<IndexScanState> PDXearchIndex::InitializeGlobalScan(const float *const query_embedding, const idx_t limit,
-                                                               const ClientContext &context) {
-	auto state = make_uniq<PDXearchIndexScanState>();
-
-	const auto n_probe = GetEffectiveNProbe(context);
-	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
-		state->row_ids =
-		    static_cast<PDXearchWrapperGlobalU8 *>(pdxearch_wrapper.get())->Search(query_embedding, limit, n_probe);
-	} else {
-		state->row_ids =
-		    static_cast<PDXearchWrapperGlobalF32 *>(pdxearch_wrapper.get())->Search(query_embedding, limit, n_probe);
-	}
-
-	return std::move(state);
-}
-
-idx_t PDXearchIndex::GlobalScan(IndexScanState &state, Vector &result, const idx_t result_offset) {
-	auto &scan_state = state.Cast<PDXearchIndexScanState>();
-
-	idx_t count = 0;
-	auto row_ids = FlatVector::GetData<row_t>(result) + result_offset;
-
-	// Push the row ids into the result vector, up to STANDARD_VECTOR_SIZE or the
-	// end of the result set
-	while (count < STANDARD_VECTOR_SIZE && scan_state.current_row < scan_state.row_ids->size()) {
-		row_ids[count++] = (*scan_state.row_ids)[scan_state.current_row++];
-	}
-
-	return count;
-}
-
-std::unique_ptr<std::vector<row_t>>
-PDXearchIndex::GlobalFilteredSearch(const float *const query_embedding, const idx_t limit,
-                                    std::vector<std::pair<Vector, idx_t>> &collected_embeddings,
-                                    const ClientContext &context) {
-	const auto n_probe = GetEffectiveNProbe(context);
-	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
-		return static_cast<PDXearchWrapperGlobalU8 *>(pdxearch_wrapper.get())
-		    ->FilteredSearch(query_embedding, limit, collected_embeddings, n_probe);
-	}
-	return static_cast<PDXearchWrapperGlobalF32 *>(pdxearch_wrapper.get())
-	    ->FilteredSearch(query_embedding, limit, collected_embeddings, n_probe);
 }
 
 /******************************************************************

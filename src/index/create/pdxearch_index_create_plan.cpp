@@ -8,12 +8,7 @@
 #include "duckdb/execution/operator/filter/physical_filter.hpp"
 
 #include "index/pdxearch_index.hpp"
-
-#ifndef PDX_USE_ALTERNATIVE_GLOBAL_VERSION
 #include "index/create/pdxearch_index_create.hpp"
-#else
-#include "index/create/pdxearch_index_global_create.hpp"
-#endif
 
 namespace duckdb {
 
@@ -128,15 +123,9 @@ PhysicalOperator &PDXearchIndex::CreatePlan(PlanIndexInput &input) {
 	null_filter.types.emplace_back(LogicalType::ROW_TYPE);
 	null_filter.children.push_back(projection);
 
-#ifndef PDX_USE_ALTERNATIVE_GLOBAL_VERSION
 	auto &physical_create_index = planner.Make<PhysicalCreatePDXearchIndex>(
 	    create_index.types, create_index.table, create_index.info->column_ids, std::move(create_index.info),
 	    std::move(create_index.unbound_expressions), create_index.estimated_cardinality);
-#else
-	auto &physical_create_index = planner.Make<PhysicalCreateGlobalPDXearchIndex>(
-	    create_index.types, create_index.table, create_index.info->column_ids, std::move(create_index.info),
-	    std::move(create_index.unbound_expressions), create_index.estimated_cardinality);
-#endif
 	physical_create_index.children.push_back(null_filter);
 	return physical_create_index;
 }

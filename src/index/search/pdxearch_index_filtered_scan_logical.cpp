@@ -2,24 +2,13 @@
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
 
-#ifndef PDX_USE_ALTERNATIVE_GLOBAL_VERSION
 #include "index/search/pdxearch_index_filtered_scan_physical.hpp"
-#else
-#include "index/search/pdxearch_index_global_filtered_scan_physical.hpp"
-#endif
 
 namespace duckdb {
 
 PhysicalOperator &LogicalPDXearchIndexFilteredScan::CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) {
-#ifndef PDX_USE_ALTERNATIVE_GLOBAL_VERSION
 	auto bind_data = make_uniq<PDXearchIndexPhysicalScanBindData>(table, index, limit, std::move(query_embedding));
 	auto &physical_op = planner.Make<PhysicalPDXearchIndexFilteredScan>(types, std::move(bind_data), column_ids, limit);
-#else
-	auto bind_data =
-	    make_uniq<GlobalPDXearchIndexPhysicalScanBindData>(table, index, limit, std::move(query_embedding));
-	auto &physical_op =
-	    planner.Make<PhysicalGlobalPDXearchIndexFilteredScan>(types, std::move(bind_data), column_ids, limit);
-#endif
 
 	// The child operator should output row_ids (from a modified Get)
 	if (!children.empty()) {

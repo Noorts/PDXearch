@@ -11,7 +11,6 @@ public:
 		auto &db = loader.GetDatabaseInstance();
 
 		RegisterIndex(db);
-		RegisterIndexScan(loader);
 
 		RegisterScanOptimizer(db);
 
@@ -21,7 +20,6 @@ public:
 
 private:
 	static void RegisterIndex(DatabaseInstance &ldb);
-	static void RegisterIndexScan(ExtensionLoader &loader);
 
 	static void RegisterScanOptimizer(DatabaseInstance &db);
 

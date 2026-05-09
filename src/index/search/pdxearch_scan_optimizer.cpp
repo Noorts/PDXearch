@@ -15,13 +15,8 @@
 #include "index/pdxearch_module.hpp"
 #include "index/pdxearch_index.hpp"
 #include "index/search/pdxearch_index_filtered_scan_logical.hpp"
-
-#ifndef PDX_USE_ALTERNATIVE_GLOBAL_VERSION
 #include "index/search/pdxearch_index_scan_logical.hpp"
 #include "index/search/pdxearch_index_scan_physical.hpp"
-#else
-#include "index/search/pdxearch_index_global_scan.hpp"
-#endif
 
 namespace duckdb {
 
@@ -355,8 +350,7 @@ public:
 		bool has_pushed_down_filters = !get.table_filters.filters.empty();
 
 		if (!has_pushed_down_filters) {
-#ifndef PDX_USE_ALTERNATIVE_GLOBAL_VERSION
-			// Scenario 1: Non-filtered search (parallel version).
+			// Scenario 1: Non-filtered search.
 
 			// 1. Store the table scan's column ids. The replacement PDXearchIndexFilteredScan will need to emit the
 			//    same columns as the table scan did.
@@ -375,24 +369,8 @@ public:
 			// 3. Remove the TopN operator.
 			plan = std::move(top_n.children[0]);
 			return true;
-#else
-			// Scenario 1: Non-filtered search (global version).
-
-			// 1. Replace the table scan with the index scan.
-			const auto cardinality = get.function.cardinality(context, bind_data.get());
-			get.function = PDXearchIndexScanFunction::GetFunction();
-			get.has_estimated_cardinality = cardinality->has_estimated_cardinality;
-			get.estimated_cardinality = cardinality->estimated_cardinality;
-			get.bind_data = std::move(bind_data);
-
-			// 2. Remove the TopN operator
-			plan = std::move(top_n.children[0]);
-			return true;
-#endif
 		} else {
-			// Scenario 2: Simple filtered search (parallel and global version)
-			// The logic inside LogicalPDXearchIndexFilteredScan determines
-			// whether to use the parallel or global implementation.
+			// Scenario 2: Simple filtered search.
 
 			// We have a top-n operator on top of a table scan that has pushed down filters.
 			// We do the following:
@@ -464,14 +442,11 @@ public:
 			if (plan->children[0]->type == LogicalOperatorType::LOGICAL_PROJECTION) {
 				auto &child = plan->children[0];
 
-				if (( // Targets non-filtered global.
-				        child->children[0]->type == LogicalOperatorType::LOGICAL_GET &&
-				        child->children[0]->Cast<LogicalGet>().function.name == "pdxearch_index_scan") ||
-				    (child->children[0]->type == LogicalOperatorType::LOGICAL_EXTENSION_OPERATOR &&
-				     ( // Targets non-filtered row group.
-				         child->children[0]->GetName() == "PDXEARCH_INDEX_SCAN" ||
-				         // Targets filtered row group and filtered global.
-				         child->children[0]->GetName() == "PDXEARCH_INDEX_FILT_SCAN"))) {
+				if (child->children[0]->type == LogicalOperatorType::LOGICAL_EXTENSION_OPERATOR &&
+				    ( // Targets non-filtered.
+				        child->children[0]->GetName() == "PDXEARCH_INDEX_SCAN" ||
+				        // Targets filtered.
+				        child->children[0]->GetName() == "PDXEARCH_INDEX_FILT_SCAN")) {
 					auto &parent_projection = plan->Cast<LogicalProjection>();
 					auto &child_projection = child->Cast<LogicalProjection>();
 
