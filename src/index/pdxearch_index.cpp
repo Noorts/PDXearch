@@ -161,8 +161,7 @@ void PDXearchIndex::Delete(IndexLock &lock, DataChunk &entries, Vector &row_ids)
 	throw NotImplementedException("PDXearchIndex::Delete() not implemented");
 }
 
-// DROP INDEX.
-void PDXearchIndex::CommitDrop(IndexLock &lock) {
+void PDXearchIndex::ResetStorage(IndexLock &lock) {
 	auto _lock = rwlock.GetExclusiveLock();
 
 	// TODO: Implement when we implement persistence.

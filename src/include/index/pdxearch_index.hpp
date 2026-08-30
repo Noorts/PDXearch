@@ -80,7 +80,7 @@ public:
 
 	void Delete(IndexLock &lock, DataChunk &entries, Vector &row_ids) override;
 
-	void CommitDrop(IndexLock &lock) override;
+	void ResetStorage(IndexLock &lock) override;
 
 	bool MergeIndexes(IndexLock &state, BoundIndex &other_index) override;
 
