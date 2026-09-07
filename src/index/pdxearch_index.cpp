@@ -1,5 +1,5 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
-#include "pdxearch/common.hpp"
+#include "pdx/common.hpp"
 #include "index/pdxearch_index.hpp"
 
 #include "index/pdxearch_module.hpp"

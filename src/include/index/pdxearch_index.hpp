@@ -6,7 +6,7 @@
 #include "duckdb/optimizer/matcher/expression_matcher.hpp"
 #include "duckdb/storage/storage_lock.hpp"
 
-#include "pdxearch/common.hpp"
+#include "pdx/common.hpp"
 #include "index/pdxearch_wrapper.hpp"
 
 namespace duckdb {

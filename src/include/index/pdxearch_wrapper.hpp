@@ -6,14 +6,15 @@
 #include <memory>
 #include <mutex>
 
-#include "pdxearch/common.hpp"
-#include "pdxearch/db_mock/predicate_evaluator.hpp"
-#include "pdxearch/index_base/pdx_ivf.hpp"
-#include "pdxearch/pruners/adsampling.hpp"
-#include "pdxearch/pdxearch.hpp"
+#include "pdx/clustering.hpp"
+#include "pdx/common.hpp"
+#include "pdx/db_mock/predicate_evaluator.hpp"
+#include "pdx/ivf_wrapper.hpp"
+#include "pdx/layout.hpp"
+#include "pdx/pruners/adsampling.hpp"
 #include "duckdb/common/helper.hpp"
 #include "index/pdxearch_index_utils.hpp"
-#include "index/pdxearch_kmeans.hpp"
+#include "index/pdxearch_searcher.hpp"
 
 namespace duckdb {
 
@@ -51,7 +52,7 @@ protected:
 public:
 	PDXearchWrapper(PDX::Quantization quantization, PDX::DistanceMetric distance_metric, uint32_t num_dimensions,
 	                uint32_t n_probe, int32_t seed)
-	    : num_dimensions(num_dimensions), is_normalized(DistanceMetricRequiresNormalization(distance_metric)),
+	    : num_dimensions(num_dimensions), is_normalized(PDX::DistanceMetricRequiresNormalization(distance_metric)),
 	      distance_metric(distance_metric), quantization(quantization), n_probe(n_probe), seed(seed),
 	      rotation_matrix(GenerateRandomRotationMatrix(num_dimensions, seed)) {
 	}
@@ -100,12 +101,12 @@ template <PDX::Quantization Q>
 class PDXRowGroup {
 public:
 	// Row group embedding storage and metadata.
-	std::unique_ptr<PDX::IndexPDXIVF<Q>> index;
+	std::unique_ptr<PDX::IVF<Q>> index;
 	std::vector<RowIdClusterMapping> row_id_metadata {DEFAULT_ROW_GROUP_SIZE};
 
-	std::unique_ptr<PDX::ADSamplingPruner<Q>> pruner;
+	std::unique_ptr<PDX::ADSamplingPruner> pruner;
 	// The searcher is reinitialized and reused across DuckDB queries.
-	std::unique_ptr<PDX::PDXearch<Q>> searcher;
+	std::unique_ptr<IterativePDXearch<Q>> searcher;
 
 	// Returns the in-memory size of the persistent elements of the row group in bytes.
 	uint64_t GetInMemorySizeInBytes() const {
@@ -201,17 +202,18 @@ public:
 			    embeddings, static_cast<size_t>(num_embeddings) * num_dimensions);
 			quantization_base = params.quantization_base;
 			quantization_scale = params.quantization_scale;
-			row_group.index = make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters,
-			                                                 IsNormalized(), quantization_scale, quantization_base);
+			row_group.index = make_uniq<PDX::IVF<Q>>(num_dimensions, num_embeddings, num_clusters, IsNormalized(),
+			                                         quantization_scale, quantization_base);
 		} else {
-			row_group.index =
-			    make_uniq<PDX::IndexPDXIVF<Q>>(num_dimensions, num_embeddings, num_clusters, IsNormalized());
+			row_group.index = make_uniq<PDX::IVF<Q>>(num_dimensions, num_embeddings, num_clusters, IsNormalized());
 		}
-		row_group.pruner = make_uniq<PDX::ADSamplingPruner<Q>>(num_dimensions, rotation_matrix.get());
+		row_group.pruner = make_uniq<PDX::ADSamplingPruner>(num_dimensions, rotation_matrix.get());
 
 		// Compute K-means centroids and embedding-to-centroid assignment (always on float embeddings).
-		KMeansResult kmeans_result =
-		    ComputeKMeans(embeddings, num_embeddings, num_dimensions, num_clusters, GetDistanceMetric(), GetSeed());
+		PDX::KMeansResult kmeans_result = PDX::ComputeKMeans(
+		    embeddings, num_embeddings, num_dimensions, num_clusters, GetDistanceMetric(), GetSeed(),
+		    /*normalize=*/false, /*sampling_fraction=*/0.0f, /*kmeans_iters=*/8, /*hierarchical_indexing=*/true,
+		    /*n_threads=*/1);
 
 		// Store centroids.
 		row_group.index->centroids = std::move(kmeans_result.centroids);
@@ -229,7 +231,9 @@ public:
 		// Set up the IVF clusters' metadata and store the embeddings.
 		for (size_t cluster_idx = 0; cluster_idx < num_clusters; cluster_idx++) {
 			const auto cluster_size = kmeans_result.assignments[cluster_idx].size();
-			auto &cluster = row_group.index->clusters.emplace_back(cluster_size, num_dimensions);
+			// The index is read-only once built, so the clusters are allocated without any growth headroom.
+			auto &cluster = row_group.index->clusters.emplace_back(cluster_size, cluster_size, num_dimensions);
+			cluster.id = cluster_idx;
 
 			for (size_t position_in_cluster = 0; position_in_cluster < cluster_size; position_in_cluster++) {
 				const auto embedding_idx = kmeans_result.assignments[cluster_idx][position_in_cluster];
@@ -250,12 +254,16 @@ public:
 				}
 			}
 
-			StoreClusterEmbeddings<Q, embedding_storage_t>(cluster, *row_group.index, tmp_cluster_embeddings.get(),
-			                                               cluster_size);
+			PDX::StoreClusterEmbeddings<Q, embedding_storage_t>(cluster, *row_group.index, tmp_cluster_embeddings.get(),
+			                                                    cluster_size);
 		}
 
+		// Computes the cluster offsets, total capacity and max cluster capacity that the searcher and the predicate
+		// evaluator rely on. Must happen after all clusters have been created.
+		row_group.index->ComputeClusterOffsets();
+
 		// Note: the searcher depends on a fully initialized index in its constructor.
-		row_group.searcher = make_uniq<PDX::PDXearch<Q>>(*row_group.index, *row_group.pruner);
+		row_group.searcher = make_uniq<IterativePDXearch<Q>>(*row_group.index, *row_group.pruner);
 	}
 
 	void InitializeSearchForRowGroup(float *const preprocessed_query_embedding, const idx_t limit,
@@ -288,14 +296,13 @@ public:
 
 	static PDX::PredicateEvaluator CreatePredicateEvaluatorForRowGroup(const std::vector<row_t> &passing_row_ids,
 	                                                                   const PDXRowGroup<Q> &row_group) {
-		PDX::PredicateEvaluator predicate_evaluator(row_group.index->num_clusters,
-		                                            row_group.index->total_num_embeddings);
+		// The selection vector is indexed by the index's capacity-based cluster offsets.
+		PDX::PredicateEvaluator predicate_evaluator(row_group.index->num_clusters, row_group.index->total_capacity);
 
 		for (auto &row_id : passing_row_ids) {
 			const auto &[cluster_id, index_in_cluster] = row_group.row_id_metadata[row_id % DEFAULT_ROW_GROUP_SIZE];
 			predicate_evaluator.n_passing_tuples[cluster_id]++;
-			predicate_evaluator.selection_vector[(row_group.searcher->cluster_offsets[cluster_id]) + index_in_cluster] =
-			    1;
+			predicate_evaluator.selection_vector[(row_group.index->cluster_offsets[cluster_id]) + index_in_cluster] = 1;
 		}
 
 		return predicate_evaluator;

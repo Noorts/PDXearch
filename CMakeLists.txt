@@ -17,8 +17,9 @@ add_subdirectory(src/index)
 find_package(OpenMP REQUIRED)
 find_package(Eigen3 REQUIRED)
 
-# SuperKMeans is a header-only library.
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/SuperKMeans/include)
+# PDX and SuperKMeans are header-only libraries.
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdx/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdx/extern/SuperKMeans/include)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})

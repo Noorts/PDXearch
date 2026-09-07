@@ -156,7 +156,8 @@ public:
 
 	void FinishEvent() override {
 		// Store PDXearch result into the source state.
-		const auto result_rowids = PDX::PDXearch<PDX::F32>::BuildResultSetFromHeap(g_state.limit, *g_state.global_heap);
+		const auto result_rowids =
+		    IterativePDXearch<PDX::F32>::BuildResultSetFromHeap(g_state.limit, *g_state.global_heap);
 		g_state.pdxearch_row_ids = make_uniq<std::vector<row_t>>(result_rowids.size());
 		for (size_t i = 0; i < result_rowids.size(); i++) {
 			(*g_state.pdxearch_row_ids)[i] = result_rowids[i].index;

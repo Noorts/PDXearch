@@ -306,7 +306,7 @@ void PhysicalFilteredScanGlobalSinkState::TryFinalizeSinkPhase(Pipeline &pipelin
 
 	if (is_heap_filled_with_k_valid_results || are_all_partitions_probed) {
 		// If we are done, then prepare emission of the results by moving the result row ids into the Source state.
-		const auto result_rowids = PDX::PDXearch<PDX::F32>::BuildResultSetFromHeap(limit, *this->global_heap);
+		const auto result_rowids = IterativePDXearch<PDX::F32>::BuildResultSetFromHeap(limit, *this->global_heap);
 		this->pdxearch_row_ids = make_uniq<std::vector<row_t>>(result_rowids.size());
 		for (size_t i = 0; i < result_rowids.size(); i++) {
 			(*this->pdxearch_row_ids)[i] = result_rowids[i].index;
