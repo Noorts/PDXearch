@@ -78,7 +78,7 @@ PDXearchIndex::PDXearchIndex(const string &name, IndexConstraintType index_const
  ******************************************************************/
 
 unique_ptr<StorageLockKey> PDXearchIndex::TakeSearchLock() {
-	return rwlock.GetExclusiveLock();
+	return rwlock.GetSharedLock();
 }
 
 void PDXearchIndex::SetUpIndexForRowGroup(const row_t *const row_ids, const float *const vectors,
@@ -92,48 +92,16 @@ void PDXearchIndex::SetUpIndexForRowGroup(const row_t *const row_ids, const floa
 	}
 }
 
-void PDXearchIndex::InitializeSearchForRowGroup(float *const preprocessed_query, const idx_t limit,
-                                                const idx_t row_group_id, PDX::Heap &heap, std::mutex &heap_mutex) {
+unique_ptr<PDX::IIterativeSearch>
+PDXearchIndex::BeginSearchForRowGroup(const idx_t row_group_id, const float *const preprocessed_query,
+                                      const idx_t limit, PDX::TopKHeap &top_k_heap,
+                                      const std::vector<row_t> *const passing_row_ids) {
 	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
-		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())
-		    ->InitializeSearchForRowGroup(preprocessed_query, limit, row_group_id, heap, heap_mutex);
-	} else {
-		static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
-		    ->InitializeSearchForRowGroup(preprocessed_query, limit, row_group_id, heap, heap_mutex);
+		return static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())
+		    ->BeginSearchForRowGroup(row_group_id, preprocessed_query, limit, top_k_heap, passing_row_ids);
 	}
-}
-
-void PDXearchIndex::SearchRowGroup(const idx_t row_group_id, const idx_t num_clusters_to_probe) {
-	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
-		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())->SearchRowGroup(row_group_id, num_clusters_to_probe);
-	} else {
-		static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())->SearchRowGroup(row_group_id, num_clusters_to_probe);
-	}
-}
-
-void PDXearchIndex::InitializeFilteredSearchForRowGroup(float *const preprocessed_query, const idx_t limit,
-                                                        const std::vector<row_t> &passing_row_ids,
-                                                        const idx_t row_group_id, PDX::Heap &heap,
-                                                        std::mutex &heap_mutex) {
-	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
-		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())
-		    ->InitializeFilteredSearchForRowGroup(preprocessed_query, limit, passing_row_ids, row_group_id, heap,
-		                                          heap_mutex);
-	} else {
-		static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
-		    ->InitializeFilteredSearchForRowGroup(preprocessed_query, limit, passing_row_ids, row_group_id, heap,
-		                                          heap_mutex);
-	}
-}
-
-void PDXearchIndex::FilteredSearchRowGroup(const idx_t row_group_id, const idx_t num_clusters_to_try_to_probe) {
-	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
-		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())
-		    ->FilteredSearchRowGroup(row_group_id, num_clusters_to_try_to_probe);
-	} else {
-		static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
-		    ->FilteredSearchRowGroup(row_group_id, num_clusters_to_try_to_probe);
-	}
+	return static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
+	    ->BeginSearchForRowGroup(row_group_id, preprocessed_query, limit, top_k_heap, passing_row_ids);
 }
 
 /******************************************************************

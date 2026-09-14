@@ -1,0 +1,102 @@
+# name: test/sql/search/index_scan_concurrent_scans.test
+# description: Two KNN queries on the same index within one statement run as two index scans that hold the index's search lock concurrently. They must return the same results as the queries run on their own.
+# group: [search]
+
+require parquet
+
+require pdxearch
+
+# Variables
+test-env INDEX_SEED 0
+
+test-env DIMS 128
+
+# One row group, so that each query probes its clusters in a deterministic order.
+test-env NUM_ROWS 20000
+
+test-env LIMIT 10
+
+test-env QUERY_EMB_A [0,16,35,5,32,31,14,10,11,78,55,10,45,83,11,6,14,57,102,75,20,8,3,5,67,17,19,26,5,0,1,22,60,26,7,1,18,22,84,53,85,119,119,4,24,18,7,7,1,81,106,102,72,30,6,0,9,1,9,119,72,1,4,33,119,29,6,1,0,1,14,52,119,30,3,0,0,55,92,111,2,5,4,9,22,89,96,14,1,0,1,82,59,16,20,5,25,14,11,4,0,0,1,26,47,23,4,0,0,4,38,83,30,14,9,4,9,17,23,41,0,0,2,8,19,25,23,1]
+
+test-env QUERY_EMB_B [1,23,25,19,8,2,0,0,41,23,17,9,4,9,14,30,83,38,4,0,0,4,23,47,26,1,0,0,4,11,14,25,5,20,16,59,82,1,0,1,14,96,89,22,9,4,5,2,111,92,55,0,0,3,30,119,52,14,1,0,1,6,29,119,33,4,1,72,119,9,1,9,0,6,30,72,102,106,81,1,7,7,18,24,4,119,119,85,53,84,22,18,1,7,26,60,22,1,0,5,26,19,17,67,5,3,8,20,75,102,57,14,6,11,83,45,10,55,78,11,10,14,31,32,5,35,16,0]
+
+# Set up the table and rows.
+statement ok
+CREATE OR REPLACE TABLE t1 (id INTEGER, emb FLOAT[${DIMS}]);
+
+statement ok
+INSERT INTO t1 FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') LIMIT ${NUM_ROWS};
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (metric = 'l2sq', quantization = 'f32', seed = ${INDEX_SEED});
+
+statement ok
+SET pdxearch_n_probe = 16;
+
+# ============================================
+# Unfiltered: two index scans in one statement.
+# ============================================
+
+# Each KNN query on its own.
+statement ok
+CREATE OR REPLACE TABLE res_a AS SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB_A}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+statement ok
+CREATE OR REPLACE TABLE res_b AS SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB_B}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+# Both KNN queries in one statement must use two index scans.
+query II
+EXPLAIN (SELECT 'a' AS q, id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB_A}::FLOAT[${DIMS}]) LIMIT ${LIMIT}) UNION ALL (SELECT 'b' AS q, id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB_B}::FLOAT[${DIMS}]) LIMIT ${LIMIT});
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_SCAN.*PDXEARCH_INDEX_SCAN.*
+
+statement ok
+CREATE OR REPLACE TABLE res_union AS (SELECT 'a' AS q, id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB_A}::FLOAT[${DIMS}]) LIMIT ${LIMIT}) UNION ALL (SELECT 'b' AS q, id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB_B}::FLOAT[${DIMS}]) LIMIT ${LIMIT});
+
+query I
+SELECT COUNT(*) FROM res_union;
+----
+20
+
+# Each half of the combined result matches the standalone query.
+query II
+SELECT
+    (SELECT COUNT(*) FROM res_a JOIN (SELECT id FROM res_union WHERE q = 'a') USING (id)),
+    (SELECT COUNT(*) FROM res_b JOIN (SELECT id FROM res_union WHERE q = 'b') USING (id));
+----
+10	10
+
+# ============================================
+# Filtered: two filtered index scans in one statement.
+# ============================================
+
+statement ok
+CREATE OR REPLACE TABLE res_a AS SELECT id FROM t1 WHERE id > 1000 ORDER BY array_distance(emb, ${QUERY_EMB_A}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+statement ok
+CREATE OR REPLACE TABLE res_b AS SELECT id FROM t1 WHERE id > 1000 ORDER BY array_distance(emb, ${QUERY_EMB_B}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+query II
+EXPLAIN (SELECT 'a' AS q, id FROM t1 WHERE id > 1000 ORDER BY array_distance(emb, ${QUERY_EMB_A}::FLOAT[${DIMS}]) LIMIT ${LIMIT}) UNION ALL (SELECT 'b' AS q, id FROM t1 WHERE id > 1000 ORDER BY array_distance(emb, ${QUERY_EMB_B}::FLOAT[${DIMS}]) LIMIT ${LIMIT});
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*PDXEARCH_INDEX_FILT_SCAN.*
+
+statement ok
+CREATE OR REPLACE TABLE res_union AS (SELECT 'a' AS q, id FROM t1 WHERE id > 1000 ORDER BY array_distance(emb, ${QUERY_EMB_A}::FLOAT[${DIMS}]) LIMIT ${LIMIT}) UNION ALL (SELECT 'b' AS q, id FROM t1 WHERE id > 1000 ORDER BY array_distance(emb, ${QUERY_EMB_B}::FLOAT[${DIMS}]) LIMIT ${LIMIT});
+
+query I
+SELECT COUNT(*) FROM res_union;
+----
+20
+
+query I
+SELECT COUNT(*) FROM res_union WHERE id <= 1000;
+----
+0
+
+query II
+SELECT
+    (SELECT COUNT(*) FROM res_a JOIN (SELECT id FROM res_union WHERE q = 'a') USING (id)),
+    (SELECT COUNT(*) FROM res_b JOIN (SELECT id FROM res_union WHERE q = 'b') USING (id));
+----
+10	10

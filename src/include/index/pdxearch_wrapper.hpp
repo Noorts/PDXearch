@@ -9,12 +9,12 @@
 #include "pdx/clustering.hpp"
 #include "pdx/common.hpp"
 #include "pdx/db_mock/predicate_evaluator.hpp"
-#include "pdx/ivf_wrapper.hpp"
-#include "pdx/layout.hpp"
+#include "pdx/indexes/ivf_core.hpp"
+#include "pdx/indexes/ivf_utils.hpp"
 #include "pdx/pruners/adsampling.hpp"
+#include "pdx/searcher.hpp"
 #include "duckdb/common/helper.hpp"
 #include "index/pdxearch_index_utils.hpp"
-#include "index/pdxearch_searcher.hpp"
 
 namespace duckdb {
 
@@ -105,8 +105,7 @@ public:
 	std::vector<RowIdClusterMapping> row_id_metadata {DEFAULT_ROW_GROUP_SIZE};
 
 	std::unique_ptr<PDX::ADSamplingPruner> pruner;
-	// The searcher is reinitialized and reused across DuckDB queries.
-	std::unique_ptr<IterativePDXearch<Q>> searcher;
+	std::unique_ptr<PDX::PDXearch<Q>> searcher;
 
 	// Returns the in-memory size of the persistent elements of the row group in bytes.
 	uint64_t GetInMemorySizeInBytes() const {
@@ -263,35 +262,26 @@ public:
 		row_group.index->ComputeClusterOffsets();
 
 		// Note: the searcher depends on a fully initialized index in its constructor.
-		row_group.searcher = make_uniq<IterativePDXearch<Q>>(*row_group.index, *row_group.pruner);
+		row_group.searcher = make_uniq<PDX::PDXearch<Q>>(*row_group.index, *row_group.pruner);
 	}
 
-	void InitializeSearchForRowGroup(float *const preprocessed_query_embedding, const idx_t limit,
-	                                 const idx_t row_group_id, PDX::Heap &heap, std::mutex &heap_mutex) {
+	unique_ptr<PDX::IIterativeSearch> BeginSearchForRowGroup(const idx_t row_group_id,
+	                                                         const float *const preprocessed_query_embedding,
+	                                                         const idx_t limit, PDX::TopKHeap &top_k_heap,
+	                                                         const std::vector<row_t> *const passing_row_ids) {
 		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
-		row_group.searcher->InitializeSearch(preprocessed_query_embedding, limit, heap, heap_mutex);
-	}
-
-	void SearchRowGroup(const idx_t row_group_id, const idx_t num_clusters_to_probe) {
-		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
-		row_group.searcher->Search(num_clusters_to_probe);
-	}
-
-	void InitializeFilteredSearchForRowGroup(float *const preprocessed_query_embedding, const idx_t limit,
-	                                         const std::vector<row_t> &passing_row_ids, const idx_t row_group_id,
-	                                         PDX::Heap &heap, std::mutex &heap_mutex) {
-		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
-
+		const auto k = static_cast<uint32_t>(limit);
+		if (!passing_row_ids) {
+			return make_uniq<typename PDX::PDXearch<Q>::template IterativeSearch<false>>(
+			    row_group.searcher->BeginIterativeSearch(preprocessed_query_embedding, k, top_k_heap,
+			                                             /*is_query_transformed=*/true));
+		}
 		auto predicate_evaluator =
-		    make_uniq<PDX::PredicateEvaluator>(CreatePredicateEvaluatorForRowGroup(passing_row_ids, row_group));
-
-		row_group.searcher->InitializeSearch(preprocessed_query_embedding, limit, heap, heap_mutex,
-		                                     std::move(predicate_evaluator));
-	}
-
-	void FilteredSearchRowGroup(const idx_t row_group_id, const idx_t num_clusters_to_try_to_probe) {
-		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
-		row_group.searcher->FilteredSearch(num_clusters_to_try_to_probe);
+		    std::make_unique<PDX::PredicateEvaluator>(CreatePredicateEvaluatorForRowGroup(*passing_row_ids, row_group));
+		return make_uniq<typename PDX::PDXearch<Q>::template IterativeSearch<true>>(
+		    row_group.searcher->BeginFilteredIterativeSearch(preprocessed_query_embedding, k,
+		                                                     std::move(predicate_evaluator), top_k_heap,
+		                                                     /*is_query_transformed=*/true));
 	}
 
 	static PDX::PredicateEvaluator CreatePredicateEvaluatorForRowGroup(const std::vector<row_t> &passing_row_ids,
