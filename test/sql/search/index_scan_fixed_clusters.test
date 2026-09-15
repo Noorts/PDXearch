@@ -68,11 +68,19 @@ INSERT INTO results (dist_func, quant, n_probe, recall) VALUES ('${distance_func
 
 endloop
 
-# Ensure recall is high because we are probing everything
+# Ensure recall is high because we are probing everything. On failure the row reports the numbers
+# instead of a bare boolean, so CI logs show what happened.
 query I
-SELECT recall > 0.95 FROM results WHERE n_probe = {DEFAULT_N_CLUSTERS};
+SELECT CASE WHEN recall > 0.95 THEN 'ok'
+    ELSE 'metric=${distance_func} quant=${quantization}'
+        || ' recalls=[' || (SELECT string_agg(n_probe || ':' || recall, ' ' ORDER BY n_probe) FROM results) || ']'
+        || ' rows=' || (SELECT COUNT(*) FROM t_idx_res)
+        || ' distinct_ids=' || (SELECT COUNT(DISTINCT id) FROM t_idx_res)
+        || ' gt_rows=' || (SELECT COUNT(*) FROM t_gt)
+    END
+FROM results WHERE n_probe = {DEFAULT_N_CLUSTERS};
 ----
-true
+ok
 
 # Ensure recall is lower, meaning that we don't have just 1 cluster
 query I
