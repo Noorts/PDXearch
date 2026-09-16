@@ -10,6 +10,8 @@
 #include "duckdb/parallel/executor_task.hpp"
 #include "duckdb/execution/executor.hpp"
 
+#include "pdx/searcher.hpp"
+
 namespace duckdb {
 
 PhysicalPDXearchIndexScan::PhysicalPDXearchIndexScan(PhysicalPlan &physical_plan, vector<LogicalType> types,
@@ -33,13 +35,6 @@ public:
 		    EmbeddingPreprocessor(index.GetNumDimensions(), index.GetRotationMatrix());
 		embedding_preprocessor.PreprocessEmbedding(bind_data.query_embedding.get(), preprocessed_query_embedding.get(),
 		                                           index.IsNormalized());
-
-		// Initialize the global heap.
-		{
-			const std::lock_guard<std::mutex> lock(global_heap_mutex);
-			global_heap = make_uniq<PDX::Heap>();
-			global_heap->push(HEAP_INITIALIZATION_ELEMENT);
-		}
 
 		// Determine number of clusters to probe per row group. The cluster count varies per row group, but a single
 		// upper bound is used here. We use the count for a full row group: for full row groups it matches exactly, and
@@ -69,9 +64,9 @@ public:
 	}
 
 	// Held for the duration of execution to serialize searches against index
-	// maintenance (and against other searches). Declared first so it is
-	// constructed first and destroyed last, ensuring the lock is held while all
-	// other members (which reference index state) are torn down.
+	// maintenance. Declared first so it is constructed first and destroyed
+	// last, ensuring the lock is held while all other members (which reference
+	// index state) are torn down.
 	unique_ptr<StorageLockKey> search_lock;
 
 	ClientContext &context;
@@ -82,12 +77,8 @@ public:
 
 	const unique_ptr<float[]> preprocessed_query_embedding;
 
-	// Global heap shared by all threads (and row groups). Assumes the `global_heap_mutex` is used.
-	std::unique_ptr<PDX::Heap> global_heap;
-	std::mutex global_heap_mutex;
-	// Element used to initialize the global heap. PDXearch uses the top of the heap in its operations, thus there must
-	// be an initial element. This element is always filtered out when the heap is transformed into a result set.
-	static constexpr PDX::KNNCandidate HEAP_INITIALIZATION_ELEMENT = {1337, std::numeric_limits<float>::max()};
+	// Top-k heap shared by the searches of all row groups (and threads).
+	PDX::TopKHeap top_k_heap {/*thread_safe=*/true};
 
 	idx_t num_clusters_to_probe_per_row_group {0};
 
@@ -118,9 +109,9 @@ public:
 	TaskExecutionResult ExecuteTask(TaskExecutionMode mode) override {
 		auto &index = g_state.index;
 
-		index.InitializeSearchForRowGroup(g_state.preprocessed_query_embedding.get(), g_state.limit, row_group_id,
-		                                  *g_state.global_heap, g_state.global_heap_mutex);
-		index.SearchRowGroup(row_group_id, g_state.num_clusters_to_probe_per_row_group);
+		auto search_cursor = index.BeginSearchForRowGroup(row_group_id, g_state.preprocessed_query_embedding.get(),
+		                                                  g_state.limit, g_state.top_k_heap, nullptr);
+		search_cursor->Next(g_state.num_clusters_to_probe_per_row_group);
 
 		event->FinishTask();
 		return TaskExecutionResult::TASK_FINISHED;
@@ -156,7 +147,7 @@ public:
 
 	void FinishEvent() override {
 		// Store PDXearch result into the source state.
-		const auto result_rowids = PDX::PDXearch<PDX::F32>::BuildResultSetFromHeap(g_state.limit, *g_state.global_heap);
+		const auto result_rowids = PDX::BuildResultSetFromHeap(g_state.limit, g_state.top_k_heap.heap);
 		g_state.pdxearch_row_ids = make_uniq<std::vector<row_t>>(result_rowids.size());
 		for (size_t i = 0; i < result_rowids.size(); i++) {
 			(*g_state.pdxearch_row_ids)[i] = result_rowids[i].index;

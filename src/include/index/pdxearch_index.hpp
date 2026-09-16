@@ -6,7 +6,7 @@
 #include "duckdb/optimizer/matcher/expression_matcher.hpp"
 #include "duckdb/storage/storage_lock.hpp"
 
-#include "pdxearch/common.hpp"
+#include "pdx/common.hpp"
 #include "index/pdxearch_wrapper.hpp"
 
 namespace duckdb {
@@ -34,11 +34,13 @@ private:
 	unique_ptr<ExpressionMatcher> function_matcher;
 	IndexPointer root_block_ptr;
 
-	// A readers-writers (shared-exclusive; exclusive prioritized) lock to
-	// enforce a "one reader (exclusive) - one maintenance operation at a
-	// time (exclusive)" access pattern. DuckDB's IndexLock is also acquired
-	// implicitly in BoundIndex, but this is insufficient to guard 1+ index
-	// scans from the maintenance operations. Hence, we add this rwlock.
+	// A readers-writers (shared-exclusive; exclusive prioritized) lock that
+	// lets any number of index scans run concurrently (shared) while a
+	// maintenance operation excludes them all (exclusive). Scans only read
+	// index state; their per-query state lives in the PDX::IIterativeSearch
+	// cursors they own. DuckDB's IndexLock is also acquired implicitly in
+	// BoundIndex, but this is insufficient to guard 1+ index scans from the
+	// maintenance operations. Hence, we add this rwlock.
 	//
 	// See the pull request this was introduced in for more context.
 	StorageLock rwlock;
@@ -59,16 +61,10 @@ public:
 
 	void SetUpIndexForRowGroup(const row_t *row_ids, const float *embeddings, idx_t num_embeddings, idx_t row_group_id);
 
-	void InitializeSearchForRowGroup(float *preprocessed_query_embedding, idx_t limit, idx_t row_group_id,
-	                                 PDX::Heap &heap, std::mutex &heap_mutex);
-
-	void SearchRowGroup(idx_t row_group_id, idx_t num_clusters_to_probe);
-
-	void InitializeFilteredSearchForRowGroup(float *preprocessed_query_embedding, idx_t limit,
-	                                         const std::vector<row_t> &passing_row_ids, idx_t row_group_id,
-	                                         PDX::Heap &heap, std::mutex &heap_mutex);
-
-	void FilteredSearchRowGroup(idx_t row_group_id, idx_t num_clusters_to_try_to_probe);
+	unique_ptr<PDX::IIterativeSearch> BeginSearchForRowGroup(idx_t row_group_id,
+	                                                         const float *preprocessed_query_embedding, idx_t limit,
+	                                                         PDX::TopKHeap &top_k_heap,
+	                                                         const std::vector<row_t> *passing_row_ids);
 
 	/******************************************************************
 	 * Index maintenance

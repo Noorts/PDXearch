@@ -11,6 +11,10 @@
 #include "duckdb/parallel/pipeline.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 
+#include "pdx/searcher.hpp"
+
+#include <algorithm>
+
 namespace duckdb {
 
 PhysicalPDXearchIndexFilteredScan::PhysicalPDXearchIndexFilteredScan(
@@ -36,13 +40,6 @@ public:
 		embedding_preprocessor.PreprocessEmbedding(bind_data.query_embedding.get(), preprocessed_query_embedding.get(),
 		                                           index.IsNormalized());
 
-		{
-			// Initialize the global heap.
-			const std::lock_guard<std::mutex> lock(global_heap_mutex);
-			global_heap = make_uniq<PDX::Heap>();
-			global_heap->push(HEAP_INITIALIZATION_ELEMENT);
-		}
-
 		auto n_probe = index.GetEffectiveNProbe(context);
 		// The cluster count varies per row group, but the iteration loop uses a single value across all row groups. We
 		// use the count for a full row group as the upper bound: for full row groups it matches exactly, and for
@@ -51,13 +48,13 @@ public:
 		partitions_to_probe_per_row_group_on_first_iteration =
 		    (n_probe == 0 || n_probe > num_clusters_for_full_row_group) ? num_clusters_for_full_row_group : n_probe;
 
-		row_group_ids_of_row_groups_with_passing_tuples.reserve(index.GetNumRowGroups());
+		search_cursors.reserve(index.GetNumRowGroups());
 	}
 
 	// Held for the duration of execution to serialize searches against index
-	// maintenance (and against other searches). Declared first so it is
-	// constructed first and destroyed last, ensuring the lock is held while all
-	// other members (which reference index state) are torn down.
+	// maintenance. Declared first so it is constructed first and destroyed
+	// last, ensuring the lock is held while all other members (which reference
+	// index state) are torn down.
 	unique_ptr<StorageLockKey> search_lock;
 
 	const ClientContext &context;
@@ -68,12 +65,8 @@ public:
 
 	const unique_ptr<float[]> preprocessed_query_embedding;
 
-	// Global heap shared by all threads (and row groups). Assumes the `global_heap_mutex` is used.
-	std::unique_ptr<PDX::Heap> global_heap;
-	std::mutex global_heap_mutex;
-	// Element used to initialize the global heap. PDXearch uses the top of the heap in its operations, thus there must
-	// be an initial element. This element is always filtered out when the heap is transformed into a result set.
-	static constexpr PDX::KNNCandidate HEAP_INITIALIZATION_ELEMENT = {1337, std::numeric_limits<float>::max()};
+	// Top-k heap shared by the searches of all row groups (and threads).
+	PDX::TopKHeap top_k_heap {/*thread_safe=*/true};
 
 	// For iteration support:
 	// Based on the n_probe.
@@ -81,13 +74,10 @@ public:
 	// The partitions to probe per iteration for each row group for all iterations except the first one. Note: the
 	// number of partitions to probe on the first iteration is determined by n_probe.
 	static constexpr idx_t PARTITIONS_TO_PROBE_PER_ROW_GROUP_PER_FOLLOW_UP_ITERATION = 5;
-	// Used together with `max_num_probe_iterations` to determine when all clusters have been probed. This is one of the
-	// "we are ready to return the heap results" exit conditions used in `TryFinalizeSinkPhase`.
-	idx_t num_probe_iterations_performed_thus_far {0};
-	constexpr idx_t GetMaximumNumberOfProbeIterations();
-	const idx_t max_num_probe_iterations {GetMaximumNumberOfProbeIterations()};
-	// Tracked so we can avoid probing a row group with no "tuples that passed the filter" in the follow up iterations.
-	std::vector<idx_t> row_group_ids_of_row_groups_with_passing_tuples;
+	// One search cursor per row group that had tuples passing the filter. A cursor tracks which of its clusters were
+	// already probed and reports `Done()` once no cluster with passing tuples is left, so follow-up iterations only
+	// schedule the cursors that still have work. Filled by Combine(), read-only afterwards.
+	std::vector<unique_ptr<PDX::IIterativeSearch>> search_cursors;
 	void TryFinalizeSinkPhase(Pipeline &pipeline, Event &event);
 
 	// Row ids of the final result of the filtered search. For these rows, during the Source phase, the projected
@@ -97,27 +87,6 @@ public:
 	//! chunks of results.
 	idx_t pdxearch_row_ids_idx {0};
 };
-
-// Computes the maximum number of probe iterations we can possibly perform. Running this many iterations ensures all
-// clusters in each row group are probed. Example: when the selection fraction is so low that there are less than K
-// results to return, then this physical operator will iteratively probe the clusters until all have been visited. Also
-// see `num_probe_iterations_performed_thus_far`.
-constexpr idx_t PhysicalFilteredScanGlobalSinkState::GetMaximumNumberOfProbeIterations() {
-	// Use the full-row-group cluster count as an upper bound. For smaller row groups the per-row-group searcher clamps,
-	// so this may schedule a few unnecessary iterations for those, but never under-probes.
-	const idx_t max_num_clusters_per_row_group = PDXearchIndex::GetNumClustersForFullRowGroup();
-
-	const bool the_first_iteration_probes_all_clusters =
-	    partitions_to_probe_per_row_group_on_first_iteration >= max_num_clusters_per_row_group;
-	if (the_first_iteration_probes_all_clusters) {
-		return 1;
-	}
-
-	const idx_t num_clusters_remaining_to_probe_after_first_iteration =
-	    max_num_clusters_per_row_group - partitions_to_probe_per_row_group_on_first_iteration;
-	return 1 + static_cast<idx_t>(std::ceil(static_cast<float>(num_clusters_remaining_to_probe_after_first_iteration) /
-	                                        PARTITIONS_TO_PROBE_PER_ROW_GROUP_PER_FOLLOW_UP_ITERATION));
-}
 
 unique_ptr<GlobalSinkState> PhysicalPDXearchIndexFilteredScan::GetGlobalSinkState(ClientContext &context) const {
 	return make_uniq<PhysicalFilteredScanGlobalSinkState>(context, *this, *bind_data);
@@ -135,12 +104,23 @@ public:
 	// sequential scan operator).
 	std::vector<row_t> current_row_group_passing_rowids;
 
-	// Merged into the global state's `row_group_ids_of_row_groups_with_passing_tuples`. See that for more.
-	std::vector<idx_t> row_group_ids_of_row_groups_with_passing_tuples;
+	// The search cursors started by this thread. Moved into the global sink state's `search_cursors` in Combine().
+	std::vector<unique_ptr<PDX::IIterativeSearch>> search_cursors;
 };
 
 unique_ptr<LocalSinkState> PhysicalPDXearchIndexFilteredScan::GetLocalSinkState(ExecutionContext &context) const {
 	return make_uniq<PhysicalFilteredScanLocalSinkState>();
+}
+
+// Starts the filtered search of the row group staged in the local state, with the row ids that passed the SQL
+// predicate, and runs its first iteration: the n_probe nearest clusters that hold passing tuples.
+static void BeginSearchForStagedRowGroup(PDXearchIndex &index, PhysicalFilteredScanGlobalSinkState &g_sink,
+                                         PhysicalFilteredScanLocalSinkState &l_sink) {
+	auto search_cursor =
+	    index.BeginSearchForRowGroup(l_sink.current_row_group_id, g_sink.preprocessed_query_embedding.get(),
+	                                 g_sink.limit, g_sink.top_k_heap, &l_sink.current_row_group_passing_rowids);
+	search_cursor->Next(g_sink.partitions_to_probe_per_row_group_on_first_iteration);
+	l_sink.search_cursors.push_back(std::move(search_cursor));
 }
 
 SinkResultType PhysicalPDXearchIndexFilteredScan::Sink(ExecutionContext &context, DataChunk &input_chunk,
@@ -162,21 +142,9 @@ SinkResultType PhysicalPDXearchIndexFilteredScan::Sink(ExecutionContext &context
 	const idx_t row_group_id = GetRowGroupId(input_chunk_row_ids[0]);
 	D_ASSERT(l_sink.current_row_group_id <= row_group_id);
 
-	// If we encounter a new row group, then initialize and perform one iteration of the filtered search for the
-	// previous row group.
+	// If we encounter a new row group, then start the filtered search of the previous row group.
 	if (row_group_id > l_sink.current_row_group_id && !l_sink.current_row_group_passing_rowids.empty()) {
-		// Use the row ids of the rows that passed the SQL predicate and which belong to this row group to initialize
-		// the filtered search for this row group.
-		index.InitializeFilteredSearchForRowGroup(g_sink.preprocessed_query_embedding.get(), bind_data->limit,
-		                                          l_sink.current_row_group_passing_rowids, l_sink.current_row_group_id,
-		                                          *g_sink.global_heap, g_sink.global_heap_mutex);
-
-		// Perform one iteration of filtered search (probing the next X clusters) for this row group.
-		index.FilteredSearchRowGroup(l_sink.current_row_group_id,
-		                             g_sink.partitions_to_probe_per_row_group_on_first_iteration);
-
-		l_sink.row_group_ids_of_row_groups_with_passing_tuples.push_back(l_sink.current_row_group_id);
-
+		BeginSearchForStagedRowGroup(index, g_sink, l_sink);
 		// Clear the local state to process the next row group.
 		l_sink.current_row_group_passing_rowids.clear();
 	}
@@ -197,23 +165,17 @@ SinkCombineResultType PhysicalPDXearchIndexFilteredScan::Combine(ExecutionContex
 	auto &l_sink = input.local_state.Cast<PhysicalFilteredScanLocalSinkState>();
 	auto &index = g_sink.index;
 
-	// If this thread's last row group has not been initialized and searched (for one iteration), do so now.
+	// If this thread's last row group has not been searched (for one iteration), do so now.
 	if (!l_sink.current_row_group_passing_rowids.empty()) {
-		index.InitializeFilteredSearchForRowGroup(g_sink.preprocessed_query_embedding.get(), bind_data->limit,
-		                                          l_sink.current_row_group_passing_rowids, l_sink.current_row_group_id,
-		                                          *g_sink.global_heap, g_sink.global_heap_mutex);
-		index.FilteredSearchRowGroup(l_sink.current_row_group_id,
-		                             g_sink.partitions_to_probe_per_row_group_on_first_iteration);
-
-		l_sink.row_group_ids_of_row_groups_with_passing_tuples.push_back(l_sink.current_row_group_id);
+		BeginSearchForStagedRowGroup(index, g_sink, l_sink);
 	}
 
-	// Merge this thread's local state into the global sink state.
+	// Merge this thread's search cursors into the global sink state.
 	const auto guard = g_sink.Lock();
-	g_sink.row_group_ids_of_row_groups_with_passing_tuples.insert(
-	    g_sink.row_group_ids_of_row_groups_with_passing_tuples.end(),
-	    l_sink.row_group_ids_of_row_groups_with_passing_tuples.begin(),
-	    l_sink.row_group_ids_of_row_groups_with_passing_tuples.end());
+	for (auto &search_cursor : l_sink.search_cursors) {
+		g_sink.search_cursors.push_back(std::move(search_cursor));
+	}
+	l_sink.search_cursors.clear();
 
 	return SinkCombineResultType::FINISHED;
 }
@@ -223,18 +185,16 @@ SinkCombineResultType PhysicalPDXearchIndexFilteredScan::Combine(ExecutionContex
 // ------------------------------
 
 // A task that performs one iteration of the filtered search for a single row group. An iteration means that the next X
-// clusters for this row group are probed.
+// clusters with passing tuples of this row group are probed.
 class PhysicalFilteredScanSearchIterationTask : public ExecutorTask {
 public:
 	PhysicalFilteredScanSearchIterationTask(shared_ptr<Event> event_p, ClientContext &context,
-	                                        PhysicalFilteredScanGlobalSinkState &g_sink_p, const PhysicalOperator &op_p,
-	                                        idx_t row_group_id_p)
-	    : ExecutorTask(context, std::move(event_p), op_p), g_sink(g_sink_p), row_group_id(row_group_id_p) {
+	                                        PDX::IIterativeSearch &search_cursor_p, const PhysicalOperator &op_p)
+	    : ExecutorTask(context, std::move(event_p), op_p), search_cursor(search_cursor_p) {
 	}
 
 	TaskExecutionResult ExecuteTask(TaskExecutionMode mode) override {
-		g_sink.index.FilteredSearchRowGroup(
-		    row_group_id,
+		search_cursor.Next(
 		    PhysicalFilteredScanGlobalSinkState::PARTITIONS_TO_PROBE_PER_ROW_GROUP_PER_FOLLOW_UP_ITERATION);
 		event->FinishTask();
 		return TaskExecutionResult::TASK_FINISHED;
@@ -245,12 +205,11 @@ public:
 	}
 
 private:
-	PhysicalFilteredScanGlobalSinkState &g_sink;
-	idx_t row_group_id;
+	PDX::IIterativeSearch &search_cursor;
 };
 
-// An event that executes one search iteration in all row groups. This means that the next X clusters of each row group
-// are probed.
+// An event that executes one search iteration in all row groups that still have clusters to probe. This means that
+// the next X clusters of each of those row groups are probed.
 class PhysicalFilteredScanSearchIterationEvent : public BasePipelineEvent {
 public:
 	PhysicalFilteredScanSearchIterationEvent(Pipeline &pipeline_p, PhysicalFilteredScanGlobalSinkState &g_sink_p)
@@ -264,15 +223,17 @@ public:
 		auto &context = pipeline->GetClientContext();
 
 		vector<shared_ptr<Task>> tasks;
-		for (const idx_t &row_group_id : g_sink.row_group_ids_of_row_groups_with_passing_tuples) {
-			tasks.push_back(make_uniq<PhysicalFilteredScanSearchIterationTask>(shared_from_this(), context, g_sink,
-			                                                                   g_sink.op, row_group_id));
+		for (auto &search_cursor : g_sink.search_cursors) {
+			if (search_cursor->Done()) {
+				continue;
+			}
+			tasks.push_back(make_uniq<PhysicalFilteredScanSearchIterationTask>(shared_from_this(), context,
+			                                                                   *search_cursor, g_sink.op));
 		}
 		SetTasks(std::move(tasks));
 	}
 
 	void FinishEvent() override {
-		g_sink.num_probe_iterations_performed_thus_far += 1;
 		g_sink.TryFinalizeSinkPhase(*pipeline, *this);
 	}
 };
@@ -281,32 +242,26 @@ SinkFinalizeType PhysicalPDXearchIndexFilteredScan::Finalize(Pipeline &pipeline,
                                                              OperatorSinkFinalizeInput &input) const {
 	auto &g_sink = input.global_state.Cast<PhysicalFilteredScanGlobalSinkState>();
 
-	g_sink.num_probe_iterations_performed_thus_far += 1;
 	g_sink.TryFinalizeSinkPhase(pipeline, event);
 
 	return SinkFinalizeType::READY;
 }
 
 // Move from the Sink phase to the Source phase if the operator is ready to begin emitting results, that is, there are K
-// valid elements in the heap or if all clusters have been probed. Else, stay in the Sink phase and run another search
-// iteration, which will probe the next X clusters for each row group.
+// results in the heap or every row group has probed all of its clusters with passing tuples. Else, stay in the Sink
+// phase and run another search iteration, which will probe the next X clusters of each row group that has some left.
 void PhysicalFilteredScanGlobalSinkState::TryFinalizeSinkPhase(Pipeline &pipeline, Event &event) {
-	D_ASSERT(global_heap->size() <= limit);
-	D_ASSERT(num_probe_iterations_performed_thus_far <= max_num_probe_iterations);
+	// All search tasks of the previous iteration have finished, so nothing else touches the heap or the cursors here.
+	D_ASSERT(top_k_heap.heap.size() <= limit);
 
-	// The heap (and thus pruning threshold) is initialized with a max float element. This float element should not be
-	// part of the result (it is not valid). There is an edge case where this element is the Kth item (at the top of the
-	// heap), thus we should run another search iteration, as it might find a valid Kth item from the next search
-	// iteration.
-	const bool is_initialization_element_at_top_of_heap =
-	    this->global_heap->top().distance == HEAP_INITIALIZATION_ELEMENT.distance;
-	const bool is_heap_filled_with_k_valid_results =
-	    this->global_heap->size() == limit && !is_initialization_element_at_top_of_heap;
-	const bool are_all_partitions_probed = num_probe_iterations_performed_thus_far == max_num_probe_iterations;
+	const bool is_heap_filled_with_k_results = top_k_heap.heap.size() == limit;
+	const bool are_all_partitions_probed =
+	    std::all_of(search_cursors.begin(), search_cursors.end(),
+	                [](const unique_ptr<PDX::IIterativeSearch> &search_cursor) { return search_cursor->Done(); });
 
-	if (is_heap_filled_with_k_valid_results || are_all_partitions_probed) {
+	if (is_heap_filled_with_k_results || are_all_partitions_probed) {
 		// If we are done, then prepare emission of the results by moving the result row ids into the Source state.
-		const auto result_rowids = PDX::PDXearch<PDX::F32>::BuildResultSetFromHeap(limit, *this->global_heap);
+		const auto result_rowids = PDX::BuildResultSetFromHeap(limit, top_k_heap.heap);
 		this->pdxearch_row_ids = make_uniq<std::vector<row_t>>(result_rowids.size());
 		for (size_t i = 0; i < result_rowids.size(); i++) {
 			(*this->pdxearch_row_ids)[i] = result_rowids[i].index;
@@ -315,7 +270,7 @@ void PhysicalFilteredScanGlobalSinkState::TryFinalizeSinkPhase(Pipeline &pipelin
 		return;
 	}
 
-	// Else, run another iteration of filtered search on all rowgroups. This visits the next clusters of each rowgroup.
+	// Else, run another iteration of filtered search on the row groups that still have clusters to probe.
 	auto new_search_iteration_event = make_shared_ptr<PhysicalFilteredScanSearchIterationEvent>(pipeline, *this);
 	event.InsertEvent(new_search_iteration_event);
 }

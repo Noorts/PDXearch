@@ -156,7 +156,9 @@ As mentioned above, we aim to address all of these limitations soon.
   collections. This means the index does not yet support updating the index when
   a `INSERT INTO` or `DELETE FROM` statement is invoked on the table.
 
-- **No concurrency**: We do not support concurrent index access yet.
+- **Limited concurrency**: Any number of KNN queries can search an index
+  concurrently, but the (not yet supported) maintenance operations exclude all
+  searches while they run.
 
 - **Requires full row groups**: The extension currently requires all but the
   last row group to be completely filled with rows. For example, three row
