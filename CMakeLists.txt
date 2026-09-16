@@ -14,54 +14,22 @@ add_subdirectory(src/index)
 # DuckDB's extension distribution supports vcpkg. As such, dependencies can be added in ./vcpkg.json and then
 # used in cmake with find_package. Feel free to remove or replace with other dependencies.
 # Note that it should also be removed from vcpkg.json to prevent needlessly installing it..
-find_package(OpenMP REQUIRED)
+# Found before PDX so that PDX and SuperKMeans reuse vcpkg's Eigen instead of their bundled copies
 find_package(Eigen3 REQUIRED)
 
-# PDX and SuperKMeans are header-only libraries.
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdx/include)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdx/extern/SuperKMeans/include)
+# PDX::PDX carries the PDX and SuperKMeans headers, BLAS (MKL / OpenBLAS / Accelerate), OpenMP and the
+# SIMD flags. The extension is a distributed binary: portable flags (AVX2 on x86_64) and no FFTW.
+set(PDX_PORTABLE ON CACHE BOOL "" FORCE)
+set(PDX_SKIP_FFTW ON CACHE BOOL "" FORCE)
+add_subdirectory(third_party/pdx)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
-target_link_libraries(${EXTENSION_NAME} OpenMP::OpenMP_CXX)
-target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenMP::OpenMP_CXX)
-
-# Based on SuperKMeans CMakeLists:
-# https://github.com/lkuffo/SuperKMeans/blob/8d64661520845d587f52283962bf482233788f4c/CMakeLists.txt#L31-L55
-set(MKL_INTERFACE_FULL "intel_lp64")
-find_package(MKL CONFIG QUIET)
-if (MKL_FOUND)
-  message(STATUS "MKL library found")
-  message(STATUS "MKL targets: ${MKL_IMPORTED_TARGETS}")
-  get_target_property(mkl_includes MKL::MKL INTERFACE_INCLUDE_DIRECTORIES)
-  message(STATUS "MKL includes: ${mkl_includes}")
-  add_definitions(-DEIGEN_USE_MKL_ALL)
-  set(MKL_COMMON_LIBS MKL::MKL OpenMP::OpenMP_CXX m dl)
-  set(BLAS_LINK_LIBRARIES "")
-else()
-  set(MKL_COMMON_LIBS "")
-  message(STATUS "MKL not found. Trying to find a BLAS implementation")
-
-  # On macOS, prefer Apple's Accelerate framework over other BLAS implementations
-  if(APPLE)
-      set(BLA_VENDOR Apple)
-      message(STATUS "macOS detected: prioritizing Apple Accelerate framework")
-  endif()
-
-  find_package(BLAS REQUIRED)
-  message(STATUS "BLAS library found: ${BLAS_LIBRARIES}")
-  add_definitions(-DEIGEN_USE_BLAS)
-  set(BLAS_LINK_LIBRARIES ${BLAS_LIBRARIES} OpenMP::OpenMP_CXX)
-endif()
-
-if(MKL_FOUND)
-  target_link_libraries(${EXTENSION_NAME} Eigen3::Eigen ${MKL_COMMON_LIBS})
-  target_link_libraries(${LOADABLE_EXTENSION_NAME} Eigen3::Eigen ${MKL_COMMON_LIBS})
-else()
-  target_link_libraries(${EXTENSION_NAME} Eigen3::Eigen ${BLAS_LINK_LIBRARIES})
-  target_link_libraries(${LOADABLE_EXTENSION_NAME} Eigen3::Eigen ${BLAS_LINK_LIBRARIES})
-endif()
+# Kept out of the exported interface: the static extension is in DuckDB's export set, PDX and its
+# dependencies are not
+target_link_libraries(${EXTENSION_NAME} $<BUILD_LOCAL_INTERFACE:PDX::PDX>)
+target_link_libraries(${LOADABLE_EXTENSION_NAME} PDX::PDX)
 
 install(
   TARGETS ${EXTENSION_NAME}
