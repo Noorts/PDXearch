@@ -1,0 +1,96 @@
+# name: test/sql/create/index_create_unaligned_row_groups.test
+# description: The index mirrors the table's physical row groups, which are not always full and aligned: a bulk insert
+#              with preserve_insertion_order = false onto a partial row group leaves it partial (54340/122880/122880).
+# group: [create]
+
+require pdxearch
+
+statement ok
+SET late_materialization_max_rows = 0;
+
+# Variables
+test-env DIMS 8
+
+test-env LIMIT 10
+
+test-env QUERY_EMB_A [0.1,0.9,0.3,0.7,0.5,0.2,0.8,0.4]
+
+test-env QUERY_EMB_B [0.6,0.1,0.8,0.2,0.9,0.7,0.3,0.5]
+
+statement ok
+CREATE TABLE src AS SELECT i AS id, [random()::FLOAT for x in range(${DIMS})]::FLOAT[${DIMS}] AS emb FROM range(100, 300100) r(i);
+
+statement ok
+CREATE TABLE t1 (id INTEGER, emb FLOAT[${DIMS}]);
+
+statement ok
+INSERT INTO t1 SELECT i, [random()::FLOAT for x in range(${DIMS})]::FLOAT[${DIMS}] FROM range(100) r(i);
+
+statement ok
+SET preserve_insertion_order = false;
+
+statement ok
+INSERT INTO t1 SELECT * FROM src;
+
+statement ok
+SET preserve_insertion_order = true;
+
+query II
+SELECT row_group_id, sum(count) FROM pragma_storage_info('t1') WHERE column_name = 'id' AND segment_type <> 'VALIDITY' GROUP BY 1 ORDER BY 1;
+----
+0	54340
+1	122880
+2	122880
+
+# Copy of the table without an index for verification.
+statement ok
+CREATE TABLE t_no_index AS FROM t1;
+
+foreach quantization f32 u8
+
+statement ok
+DROP INDEX IF EXISTS t1_idx;
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (metric = 'l2sq', quantization = '${quantization}', n_probe = 0, seed = 0);
+
+query II
+EXPLAIN SELECT * FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB_A}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_SCAN.*Row Groups: 3[^0-9].*
+
+statement ok
+CREATE OR REPLACE TABLE t_gt AS SELECT id FROM t_no_index ORDER BY array_distance(emb, ${QUERY_EMB_A}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+statement ok
+CREATE OR REPLACE TABLE t_idx_res AS SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB_A}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+query I
+SELECT COUNT(*) >= ${LIMIT} - 1 FROM t_gt JOIN t_idx_res USING (id);
+----
+true
+
+statement ok
+CREATE OR REPLACE TABLE t_gt AS SELECT id FROM t_no_index ORDER BY array_distance(emb, ${QUERY_EMB_B}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+statement ok
+CREATE OR REPLACE TABLE t_idx_res AS SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB_B}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+query I
+SELECT COUNT(*) >= ${LIMIT} - 1 FROM t_gt JOIN t_idx_res USING (id);
+----
+true
+
+# Filtered search over the same rows.
+statement ok
+CREATE OR REPLACE TABLE t_gt AS SELECT id FROM t_no_index WHERE id % 3 = 0 ORDER BY array_distance(emb, ${QUERY_EMB_A}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+statement ok
+CREATE OR REPLACE TABLE t_idx_res AS SELECT id FROM t1 WHERE id % 3 = 0 ORDER BY array_distance(emb, ${QUERY_EMB_A}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+query I
+SELECT COUNT(*) >= ${LIMIT} - 1 FROM t_gt JOIN t_idx_res USING (id);
+----
+true
+
+endloop

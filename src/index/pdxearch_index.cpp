@@ -1,4 +1,6 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/storage/table/row_group_collection.hpp"
+#include "duckdb/storage/table/row_group_segment_tree.hpp"
 #include "pdx/common.hpp"
 #include "index/pdxearch_index.hpp"
 
@@ -12,10 +14,19 @@ PDXearchIndex::PDXearchIndex(const string &name, IndexConstraintType index_const
                              const vector<column_t> &column_ids, TableIOManager &table_io_manager,
                              const vector<unique_ptr<Expression>> &unbound_expressions, AttachedDatabase &db,
                              const case_insensitive_map_t<Value> &index_creation_options,
-                             const IndexStorageInfo &persistence_info, idx_t estimated_cardinality)
-    : BoundIndex(name, TYPE_NAME, index_constraint_type, column_ids, table_io_manager, unbound_expressions, db) {
+                             const IndexStorageInfo &persistence_info, optional_ptr<DataTable> table_p)
+    : BoundIndex(name, TYPE_NAME, index_constraint_type, column_ids, table_io_manager, unbound_expressions, db),
+      table(table_p) {
 	if (index_constraint_type != IndexConstraintType::NONE) {
 		throw NotImplementedException("PDXearch indexes do not support unique or primary key constraints");
+	}
+	if (!table) {
+		throw InternalException(
+		    "Something went wrong: the PDXearch index was created without its table. This is likely because a "
+		    "malformed persisted index was loaded. Index persistence is not supported yet, but DuckDB will still "
+		    "try to persist it. Open your database file manually (duckdb test.db) and drop the index(es). Run "
+		    "'SELECT sql FROM duckdb_indexes();' to see the indexes, and then 'DROP INDEX index_name;' to drop the "
+		    "unused index(es).");
 	}
 
 	// We only support one ARRAY column
@@ -58,14 +69,13 @@ PDXearchIndex::PDXearchIndex(const string &name, IndexConstraintType index_const
 		seed = seed_opt->second.GetValue<int32_t>();
 	}
 
+	const idx_t row_group_size = table->GetRowGroupSize();
 	if (quantization == PDX::Quantization::F32) {
 		D_ASSERT(ArrayType::GetChildType(embedding_type).id() == LogicalTypeId::FLOAT);
 
-		pdxearch_wrapper =
-		    make_uniq<PDXearchWrapperF32>(dist_metric, num_dimensions, n_probe, seed, estimated_cardinality);
+		pdxearch_wrapper = make_uniq<PDXearchWrapperF32>(dist_metric, num_dimensions, n_probe, seed, row_group_size);
 	} else if (quantization == PDX::Quantization::U8) {
-		pdxearch_wrapper =
-		    make_uniq<PDXearchWrapperU8>(dist_metric, num_dimensions, n_probe, seed, estimated_cardinality);
+		pdxearch_wrapper = make_uniq<PDXearchWrapperU8>(dist_metric, num_dimensions, n_probe, seed, row_group_size);
 	} else {
 		throw InternalException("Unsupported quantization: %s", quantization);
 	}
@@ -81,27 +91,60 @@ unique_ptr<StorageLockKey> PDXearchIndex::TakeSearchLock() {
 	return rwlock.GetSharedLock();
 }
 
+idx_t PDXearchIndex::GetRowGroupSize() const {
+	return table->GetRowGroupSize();
+}
+
+bool PDXearchIndex::TryGetPhysicalRowGroup(const row_t row_id, PDXearchRowGroupBounds &result) const {
+	auto row_groups = table->GetRowGroupCollection()->GetRowGroups();
+	auto lock = row_groups->Lock();
+	idx_t segment_index;
+	if (!row_groups->TryGetSegmentIndex(lock, static_cast<idx_t>(row_id), segment_index)) {
+		return false;
+	}
+	auto node = row_groups->GetSegmentByIndex(lock, static_cast<int64_t>(segment_index));
+	result = {static_cast<row_t>(node->GetRowStart()), node->GetCount()};
+	return true;
+}
+
+vector<PDXearchRowGroupBounds> PDXearchIndex::GetPhysicalRowGroups() const {
+	vector<PDXearchRowGroupBounds> result;
+	auto row_groups = table->GetRowGroupCollection()->GetRowGroups();
+	auto lock = row_groups->Lock();
+	for (auto node = row_groups->GetRootSegment(lock); node; node = row_groups->GetNextSegment(lock, *node)) {
+		result.push_back({static_cast<row_t>(node->GetRowStart()), node->GetCount()});
+	}
+	return result;
+}
+
+optional_idx PDXearchIndex::LookupRowGroup(const row_t row_id) const {
+	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+		return static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())->LookupRowGroup(row_id);
+	}
+	return static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())->LookupRowGroup(row_id);
+}
+
 void PDXearchIndex::SetUpIndexForRowGroup(const row_t *const row_ids, const float *const vectors,
-                                          const idx_t num_vectors, const idx_t row_group_id) {
+                                          const idx_t num_vectors, const row_t row_start, const idx_t count) {
 	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
 		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())
-		    ->SetUpIndexForRowGroup(row_ids, vectors, num_vectors, row_group_id);
+		    ->SetUpIndexForRowGroup(row_ids, vectors, num_vectors, row_start, count);
 	} else {
 		static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
-		    ->SetUpIndexForRowGroup(row_ids, vectors, num_vectors, row_group_id);
+		    ->SetUpIndexForRowGroup(row_ids, vectors, num_vectors, row_start, count);
 	}
 }
 
 unique_ptr<PDX::IIterativeSearch>
-PDXearchIndex::BeginSearchForRowGroup(const idx_t row_group_id, const float *const preprocessed_query,
+PDXearchIndex::BeginSearchForRowGroup(const idx_t row_group_idx, const float *const preprocessed_query,
                                       const idx_t limit, PDX::TopKHeap &top_k_heap,
-                                      const std::vector<row_t> *const passing_row_ids) {
+                                      const std::vector<size_t> *const passing_row_ids) {
 	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
 		return static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())
-		    ->BeginSearchForRowGroup(row_group_id, preprocessed_query, limit, top_k_heap, passing_row_ids);
+		    ->BeginSearchForRowGroup(row_group_idx, preprocessed_query, limit, top_k_heap, passing_row_ids);
 	}
 	return static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
-	    ->BeginSearchForRowGroup(row_group_id, preprocessed_query, limit, top_k_heap, passing_row_ids);
+	    ->BeginSearchForRowGroup(row_group_idx, preprocessed_query, limit, top_k_heap, passing_row_ids);
 }
 
 /******************************************************************

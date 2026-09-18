@@ -4,12 +4,19 @@
 #include "duckdb/execution/index/index_pointer.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/optimizer/matcher/expression_matcher.hpp"
+#include "duckdb/storage/data_table.hpp"
 #include "duckdb/storage/storage_lock.hpp"
 
 #include "pdx/common.hpp"
 #include "index/pdxearch_wrapper.hpp"
 
 namespace duckdb {
+
+// A DuckDB row group: the rows [row_start, row_start + count).
+struct PDXearchRowGroupBounds {
+	row_t row_start;
+	idx_t count;
+};
 
 struct PDXearchIndexStats {
 	string metric;
@@ -30,6 +37,8 @@ public:
 
 private:
 	unique_ptr<PDXearchWrapper> pdxearch_wrapper;
+	// The indexed table; its row group segment tree is the source of truth for the row groups we mirror.
+	optional_ptr<DataTable> table;
 
 	unique_ptr<ExpressionMatcher> function_matcher;
 	IndexPointer root_block_ptr;
@@ -49,7 +58,7 @@ public:
 	PDXearchIndex(const string &name, IndexConstraintType index_constraint_type, const vector<column_t> &column_ids,
 	              TableIOManager &table_io_manager, const vector<unique_ptr<Expression>> &unbound_expressions,
 	              AttachedDatabase &db, const case_insensitive_map_t<Value> &options,
-	              const IndexStorageInfo &info = IndexStorageInfo(), idx_t estimated_cardinality = 0);
+	              const IndexStorageInfo &info = IndexStorageInfo(), optional_ptr<DataTable> table = nullptr);
 
 	static PhysicalOperator &CreatePlan(PlanIndexInput &input);
 
@@ -59,12 +68,24 @@ public:
 
 	unique_ptr<StorageLockKey> TakeSearchLock();
 
-	void SetUpIndexForRowGroup(const row_t *row_ids, const float *embeddings, idx_t num_embeddings, idx_t row_group_id);
+	idx_t GetRowGroupSize() const;
 
-	unique_ptr<PDX::IIterativeSearch> BeginSearchForRowGroup(idx_t row_group_id,
+	// The DuckDB row group that holds row_id. False if the row is not in the table (yet).
+	bool TryGetPhysicalRowGroup(row_t row_id, PDXearchRowGroupBounds &result) const;
+
+	vector<PDXearchRowGroupBounds> GetPhysicalRowGroups() const;
+
+	// Position of the index's row group that holds row_id (the row_group_idx of the methods below).
+	optional_idx LookupRowGroup(row_t row_id) const;
+
+	void SetUpIndexForRowGroup(const row_t *row_ids, const float *embeddings, idx_t num_embeddings, row_t row_start,
+	                           idx_t count);
+
+	// passing_row_ids are size_t because they go straight into PDX's IPDXIndex::BeginIterativeSearch.
+	unique_ptr<PDX::IIterativeSearch> BeginSearchForRowGroup(idx_t row_group_idx,
 	                                                         const float *preprocessed_query_embedding, idx_t limit,
 	                                                         PDX::TopKHeap &top_k_heap,
-	                                                         const std::vector<row_t> *passing_row_ids);
+	                                                         const std::vector<size_t> *passing_row_ids);
 
 	/******************************************************************
 	 * Index maintenance

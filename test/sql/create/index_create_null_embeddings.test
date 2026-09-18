@@ -1,0 +1,70 @@
+# name: test/sql/create/index_create_null_embeddings.test
+# description: Rows with a NULL embedding are absent from the index; searches never return them and filtered searches
+#              whose predicate passes them are unaffected.
+# group: [create]
+
+require pdxearch
+
+statement ok
+SET late_materialization_max_rows = 0;
+
+# Variables
+test-env DIMS 8
+
+test-env NUM_ROWS 50000
+
+test-env LIMIT 10
+
+test-env QUERY_EMB [0.1,0.9,0.3,0.7,0.5,0.2,0.8,0.4]
+
+statement ok
+CREATE TABLE t1 AS SELECT i AS id, [random()::FLOAT for x in range(${DIMS})]::FLOAT[${DIMS}] AS emb FROM range(${NUM_ROWS}) r(i);
+
+statement ok
+UPDATE t1 SET emb = NULL WHERE id % 10 = 0;
+
+statement ok
+CREATE TABLE t_no_index AS FROM t1;
+
+foreach quantization f32 u8
+
+statement ok
+DROP INDEX IF EXISTS t1_idx;
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (metric = 'l2sq', quantization = '${quantization}', n_probe = 0, seed = 0);
+
+statement ok
+CREATE OR REPLACE TABLE t_gt AS SELECT id FROM t_no_index WHERE emb IS NOT NULL ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+statement ok
+CREATE OR REPLACE TABLE t_idx_res AS SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+query I
+SELECT COUNT(*) FROM t_idx_res WHERE id % 10 = 0;
+----
+0
+
+query I
+SELECT COUNT(*) >= ${LIMIT} - 1 FROM t_gt JOIN t_idx_res USING (id);
+----
+true
+
+# The predicate passes the NULL rows too; they must be skipped, not mapped onto other rows.
+statement ok
+CREATE OR REPLACE TABLE t_gt AS SELECT id FROM t_no_index WHERE id % 5 = 0 AND emb IS NOT NULL ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+statement ok
+CREATE OR REPLACE TABLE t_idx_res AS SELECT id FROM t1 WHERE id % 5 = 0 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+query I
+SELECT COUNT(*) FROM t_idx_res WHERE id % 10 = 0;
+----
+0
+
+query I
+SELECT COUNT(*) >= ${LIMIT} - 1 FROM t_gt JOIN t_idx_res USING (id);
+----
+true
+
+endloop

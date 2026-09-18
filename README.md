@@ -160,12 +160,6 @@ As mentioned above, we aim to address all of these limitations soon.
   concurrently, but the (not yet supported) maintenance operations exclude all
   searches while they run.
 
-- **Requires full row groups**: The extension currently requires all but the
-  last row group to be completely filled with rows. For example, three row
-  groups where they have 122880, 122880, 4000 rows respectively is valid.
-  Inserting rows in batches of 122880 can help to create such a layout. This is
-  a limitation we aim to address very soon.
-
 - **Late materialization and filter types**: As noted above, we don't optimally
   handle DuckDB's late materialization optimizer rule yet. Furthermore, on a
   related note, we currently only support filtered vector similarity queries

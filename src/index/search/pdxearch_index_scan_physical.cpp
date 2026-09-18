@@ -10,7 +10,7 @@
 #include "duckdb/parallel/executor_task.hpp"
 #include "duckdb/execution/executor.hpp"
 
-#include "pdx/searcher.hpp"
+#include "pdx/ivf_searcher.hpp"
 
 namespace duckdb {
 

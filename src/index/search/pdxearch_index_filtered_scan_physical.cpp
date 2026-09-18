@@ -11,7 +11,7 @@
 #include "duckdb/parallel/pipeline.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 
-#include "pdx/searcher.hpp"
+#include "pdx/ivf_searcher.hpp"
 
 #include <algorithm>
 
@@ -94,22 +94,22 @@ unique_ptr<GlobalSinkState> PhysicalPDXearchIndexFilteredScan::GetGlobalSinkStat
 
 class PhysicalFilteredScanLocalSinkState : public LocalSinkState {
 public:
-	PhysicalFilteredScanLocalSinkState() : current_row_group_passing_rowids() {
-		current_row_group_passing_rowids.reserve(DEFAULT_ROW_GROUP_SIZE);
+	explicit PhysicalFilteredScanLocalSinkState(const PDXearchIndex &index) : current_row_group_passing_rowids() {
+		current_row_group_passing_rowids.reserve(index.GetRowGroupSize());
 	}
 
 	// Temporary row group staging area.
 	idx_t current_row_group_id {0};
 	// The row ids of the current row group that passed the predicate and were thus emitted by the child operator (e.g.,
-	// sequential scan operator).
-	std::vector<row_t> current_row_group_passing_rowids;
+	// sequential scan operator). size_t because they are handed to PDX as-is.
+	std::vector<size_t> current_row_group_passing_rowids;
 
 	// The search cursors started by this thread. Moved into the global sink state's `search_cursors` in Combine().
 	std::vector<unique_ptr<PDX::IIterativeSearch>> search_cursors;
 };
 
 unique_ptr<LocalSinkState> PhysicalPDXearchIndexFilteredScan::GetLocalSinkState(ExecutionContext &context) const {
-	return make_uniq<PhysicalFilteredScanLocalSinkState>();
+	return make_uniq<PhysicalFilteredScanLocalSinkState>(bind_data->index.Cast<PDXearchIndex>());
 }
 
 // Starts the filtered search of the row group staged in the local state, with the row ids that passed the SQL
@@ -139,7 +139,13 @@ SinkResultType PhysicalPDXearchIndexFilteredScan::Sink(ExecutionContext &context
 
 	input_chunk.data[0].Flatten(input_chunk.size());
 	const auto input_chunk_row_ids = FlatVector::GetData<row_t>(input_chunk.data[0]);
-	const idx_t row_group_id = GetRowGroupId(input_chunk_row_ids[0]);
+	// A chunk never spans two DuckDB row groups, so the first row id tells which one this chunk belongs to.
+	const auto row_group_idx = index.LookupRowGroup(input_chunk_row_ids[0]);
+	if (!row_group_idx.IsValid()) {
+		// A DuckDB row group without indexed rows (all its embeddings are NULL) has no index row group.
+		return SinkResultType::NEED_MORE_INPUT;
+	}
+	const idx_t row_group_id = row_group_idx.GetIndex();
 	D_ASSERT(l_sink.current_row_group_id <= row_group_id);
 
 	// If we encounter a new row group, then start the filtered search of the previous row group.
@@ -152,9 +158,9 @@ SinkResultType PhysicalPDXearchIndexFilteredScan::Sink(ExecutionContext &context
 
 	// Collect row ids of the current row group into the local state.
 	for (idx_t i = 0; i < input_chunk.size(); i++) {
-		l_sink.current_row_group_passing_rowids.push_back(input_chunk_row_ids[i]);
+		l_sink.current_row_group_passing_rowids.push_back(static_cast<size_t>(input_chunk_row_ids[i]));
 	}
-	D_ASSERT(l_sink.current_row_group_passing_rowids.size() <= DEFAULT_ROW_GROUP_SIZE);
+	D_ASSERT(l_sink.current_row_group_passing_rowids.size() <= index.GetRowGroupSize());
 
 	return SinkResultType::NEED_MORE_INPUT;
 }

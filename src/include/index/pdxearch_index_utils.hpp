@@ -11,10 +11,6 @@
 
 namespace duckdb {
 
-[[nodiscard]] inline constexpr idx_t GetRowGroupId(const row_t row_id) {
-	return row_id / DEFAULT_ROW_GROUP_SIZE;
-}
-
 // Generate a rotation matrix suitable for PDXearch's ADSampling pruning algorithm.
 //
 // Based on https://github.com/cwida/PDX/blob/main/python/pdxearch/preprocessors.py#L39
