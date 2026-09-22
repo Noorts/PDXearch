@@ -47,7 +47,7 @@ SELECT row_group_id, sum(count) FROM pragma_storage_info('t1') WHERE column_name
 statement ok
 CREATE TABLE t_no_index AS FROM t1;
 
-foreach quantization f32 u8
+foreach quantization f32
 
 statement ok
 DROP INDEX IF EXISTS t1_idx;

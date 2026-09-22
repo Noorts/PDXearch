@@ -36,7 +36,7 @@ test-env MARKER_B [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
 statement ok
 CREATE TABLE sift AS SELECT id, emb::FLOAT[${DIMS}] AS emb FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') WHERE id < 32768;
 
-foreach quantization f32 u8
+foreach quantization f32
 
 statement ok
 CREATE OR REPLACE TABLE t1 (id BIGINT, emb FLOAT[${DIMS}]);

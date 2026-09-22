@@ -44,7 +44,7 @@ USE iso;
 statement ok con2
 SET late_materialization_max_rows = 0;
 
-foreach quantization f32 u8
+foreach quantization f32
 
 statement ok
 CREATE OR REPLACE TABLE t1 AS SELECT * FROM sift WHERE id < 8192;

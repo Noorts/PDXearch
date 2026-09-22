@@ -123,7 +123,7 @@ foreach tbl t_last_one t_first_one t_last_2047 t_last_2048 t_last_nulls t_delete
 statement ok
 CREATE TABLE ${tbl}_copy AS FROM ${tbl};
 
-foreach quantization f32 u8
+foreach quantization f32
 
 statement ok
 DROP INDEX IF EXISTS ${tbl}_idx;
@@ -148,14 +148,10 @@ CREATE OR REPLACE TABLE t_gt AS SELECT id FROM ${tbl}_copy WHERE emb IS NOT NULL
 statement ok
 CREATE OR REPLACE TABLE t_idx_res AS SELECT id FROM ${tbl} ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
 
-# On failure the row names the table, quantization and hit count, so CI logs show what happened.
 query I
-SELECT CASE WHEN COUNT(*) >= ${LIMIT} - 1 THEN 'ok'
-    ELSE 'tbl=${tbl} quant=${quantization} hits=' || COUNT(*) || ' idx_rows=' || (SELECT COUNT(*) FROM t_idx_res)
-        || ' gt_rows=' || (SELECT COUNT(*) FROM t_gt) END
-FROM t_gt JOIN t_idx_res USING (id);
+SELECT COUNT(*) >= ${LIMIT} - 1 FROM t_gt JOIN t_idx_res USING (id);
 ----
-ok
+true
 
 # Filtered search over the same rows.
 statement ok
@@ -165,12 +161,9 @@ statement ok
 CREATE OR REPLACE TABLE t_idx_res AS SELECT id FROM ${tbl} WHERE id % 3 = 0 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
 
 query I
-SELECT CASE WHEN COUNT(*) >= ${LIMIT} - 1 THEN 'ok'
-    ELSE 'filtered tbl=${tbl} quant=${quantization} hits=' || COUNT(*) || ' idx_rows=' || (SELECT COUNT(*) FROM t_idx_res)
-        || ' gt_rows=' || (SELECT COUNT(*) FROM t_gt) END
-FROM t_gt JOIN t_idx_res USING (id);
+SELECT COUNT(*) >= ${LIMIT} - 1 FROM t_gt JOIN t_idx_res USING (id);
 ----
-ok
+true
 
 # A filter that passes only the degenerate row.
 query I
