@@ -15,6 +15,7 @@ public:
 		RegisterScanOptimizer(db);
 
 		RegisterIndexInfo(loader);
+		RegisterSyncIndex(loader);
 		RegisterBlobFunctions(loader);
 	}
 
@@ -24,6 +25,7 @@ private:
 	static void RegisterScanOptimizer(DatabaseInstance &db);
 
 	static void RegisterIndexInfo(ExtensionLoader &loader);
+	static void RegisterSyncIndex(ExtensionLoader &loader);
 	static void RegisterBlobFunctions(ExtensionLoader &loader);
 };
 

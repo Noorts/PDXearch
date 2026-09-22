@@ -6,16 +6,17 @@
 #include "duckdb/optimizer/matcher/expression_matcher.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/storage/storage_lock.hpp"
+#include <atomic>
 
 #include "pdx/common.hpp"
 #include "index/pdxearch_wrapper.hpp"
 
 namespace duckdb {
 
-// A DuckDB row group: the rows [row_start, row_start + count).
-struct PDXearchRowGroupBounds {
-	row_t row_start;
-	idx_t count;
+// The rows [start, end).
+struct PDXearchRowRange {
+	row_t start;
+	row_t end;
 };
 
 struct PDXearchIndexStats {
@@ -37,8 +38,25 @@ public:
 
 private:
 	unique_ptr<PDXearchWrapper> pdxearch_wrapper;
-	// The indexed table; its row group segment tree is the source of truth for the row groups we mirror.
-	optional_ptr<DataTable> table;
+	unique_ptr<EmbeddingPreprocessor> embedding_preprocessor;
+
+	// Row ids committed to the table (one range per Append call) whose embeddings are not in the index yet.
+	// SyncWithTable reads the row groups they landed in from the table and fetches them back.
+	std::vector<PDXearchRowRange> unindexed_row_ranges;
+	std::atomic<bool> has_unindexed_rows {false};
+
+	void AppendRow(idx_t row_group_idx, row_t row_id, const float *transformed_embedding);
+	void DeleteRow(row_t row_id);
+
+	// The committed rows of [start, end) whose embedding is not NULL, transformed. Returns how many were written;
+	// rows_returned counts every committed row the table returned, NULL embeddings included.
+	idx_t FetchRows(DataTable &table, row_t start, row_t end, row_t *row_ids, float *embeddings, idx_t &rows_returned);
+	// Row groups whose mirrors must be dropped and, if the row group still exists, rebuilt from the table.
+	vector<PDXearchRowGroupBounds> FindStaleRowGroups(DataTable &table) const;
+	void RemoveRowGroupsOverlapping(row_t start, row_t end);
+	void RemoveUnindexedRow(row_t row_id);
+	// No unindexed rows and every mirrored row group matches its DuckDB row group.
+	bool IsInSyncWithTable(DataTable &table) const;
 
 	unique_ptr<ExpressionMatcher> function_matcher;
 	IndexPointer root_block_ptr;
@@ -58,7 +76,7 @@ public:
 	PDXearchIndex(const string &name, IndexConstraintType index_constraint_type, const vector<column_t> &column_ids,
 	              TableIOManager &table_io_manager, const vector<unique_ptr<Expression>> &unbound_expressions,
 	              AttachedDatabase &db, const case_insensitive_map_t<Value> &options,
-	              const IndexStorageInfo &info = IndexStorageInfo(), optional_ptr<DataTable> table = nullptr);
+	              const IndexStorageInfo &info = IndexStorageInfo());
 
 	static PhysicalOperator &CreatePlan(PlanIndexInput &input);
 
@@ -66,14 +84,25 @@ public:
 	 * Index creation and search methods specific to the parallel implementation
 	 ******************************************************************/
 
-	unique_ptr<StorageLockKey> TakeSearchLock();
+	// Syncs the index with the table if it is out of date, then returns the shared lock a search holds while it runs.
+	// The table is passed in on every call: ALTER TABLE replaces the DataTable while the index object lives on.
+	unique_ptr<StorageLockKey> SyncAndLockForSearch(DataTable &table);
+
+	bool HasUnindexedRows() const {
+		return has_unindexed_rows;
+	}
+
+	// Rebuilds the mirrors of row groups a checkpoint merged or dropped, then fetches the unindexed rows back from
+	// the table, one DuckDB row group at a time, and builds or extends the mirrored row group. Rows whose commit is
+	// still in flight stay unindexed.
+	void SyncWithTable(DataTable &table);
 
 	idx_t GetRowGroupSize() const;
 
 	// The DuckDB row group that holds row_id. False if the row is not in the table (yet).
-	bool TryGetPhysicalRowGroup(row_t row_id, PDXearchRowGroupBounds &result) const;
+	bool TryGetPhysicalRowGroup(DataTable &table, row_t row_id, PDXearchRowGroupBounds &result) const;
 
-	vector<PDXearchRowGroupBounds> GetPhysicalRowGroups() const;
+	vector<PDXearchRowGroupBounds> GetPhysicalRowGroups(DataTable &table) const;
 
 	// Position of the index's row group that holds row_id (the row_group_idx of the methods below).
 	optional_idx LookupRowGroup(row_t row_id) const;

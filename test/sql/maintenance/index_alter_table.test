@@ -1,0 +1,140 @@
+# name: test/sql/maintenance/index_alter_table.test
+# description: ALTER TABLE ADD COLUMN replaces the table's DataTable while the index object lives on; the index must follow
+#              the table's current storage so later commits are indexed and searches stay exact. (It is the only ALTER
+#              DuckDB allows on a table with an index.)
+# group: [maintenance]
+
+require parquet
+
+require pdxearch
+
+# A database with small row groups keeps the multi-row-group layouts cheap; no automatic checkpoint may merge
+# row groups halfway through the test.
+statement ok
+ATTACH '__TEST_DIR__/alter.db' AS alter (ROW_GROUP_SIZE 8192);
+
+statement ok
+USE alter;
+
+statement ok
+SET late_materialization_max_rows = 0;
+
+statement ok
+SET checkpoint_threshold = '10GB';
+
+# Variables
+test-env DIMS 128
+
+test-env LIMIT 10
+
+test-env QUERY_EMB [0,16,35,5,32,31,14,10,11,78,55,10,45,83,11,6,14,57,102,75,20,8,3,5,67,17,19,26,5,0,1,22,60,26,7,1,18,22,84,53,85,119,119,4,24,18,7,7,1,81,106,102,72,30,6,0,9,1,9,119,72,1,4,33,119,29,6,1,0,1,14,52,119,30,3,0,0,55,92,111,2,5,4,9,22,89,96,14,1,0,1,82,59,16,20,5,25,14,11,4,0,0,1,26,47,23,4,0,0,4,38,83,30,14,9,4,9,17,23,41,0,0,2,8,19,25,23,1]
+
+test-env MARKER_A [200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200]
+
+test-env MARKER_B [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+
+statement ok
+CREATE TABLE sift AS SELECT id, emb::FLOAT[${DIMS}] AS emb FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') WHERE id < 32768;
+
+foreach quantization f32 u8
+
+statement ok
+CREATE OR REPLACE TABLE t1 AS SELECT id, emb, id % 7 AS extra FROM sift WHERE id < 8192;
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (metric = 'l2sq', quantization = '${quantization}', n_probe = 0, seed = 0);
+
+query I
+SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 1;
+----
+0
+
+# Add a column, then commit new rows and search.
+statement ok
+ALTER TABLE t1 ADD COLUMN added INTEGER DEFAULT 3;
+
+statement ok
+INSERT INTO t1 (id, emb) SELECT id, emb FROM sift WHERE id >= 8192 AND id < 9192 UNION ALL SELECT -1, ${MARKER_A}::FLOAT[${DIMS}];
+
+query I
+SELECT id FROM t1 ORDER BY array_distance(emb, ${MARKER_A}::FLOAT[${DIMS}]) LIMIT 1;
+----
+-1
+
+query II
+EXPLAIN SELECT * FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_SCAN.*Row Groups: 2[^0-9].*
+
+statement ok
+CREATE OR REPLACE TABLE t_copy AS FROM t1;
+
+statement ok
+CREATE OR REPLACE TABLE t_gt AS SELECT id FROM t_copy WHERE emb IS NOT NULL ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+statement ok
+CREATE OR REPLACE TABLE t_idx_res AS SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+query I
+SELECT COUNT(*) >= ${LIMIT} - 1 FROM t_gt JOIN t_idx_res USING (id);
+----
+true
+
+# (DuckDB does not allow DROP COLUMN on a table with an index, see duckdb/duckdb#17348, so that case does not exist.)
+statement ok
+INSERT INTO t1 (id, emb) VALUES (-2, ${MARKER_B}::FLOAT[${DIMS}]);
+
+query I
+SELECT id FROM t1 ORDER BY array_distance(emb, ${MARKER_B}::FLOAT[${DIMS}]) LIMIT 1;
+----
+-2
+
+query I
+SELECT id FROM t1 ORDER BY array_distance(emb, ${MARKER_A}::FLOAT[${DIMS}]) LIMIT 1;
+----
+-1
+
+statement ok
+DELETE FROM t1 WHERE id = -1;
+
+query I
+SELECT id <> -1 FROM t1 ORDER BY array_distance(emb, ${MARKER_A}::FLOAT[${DIMS}]) LIMIT 1;
+----
+true
+
+# A second ADD COLUMN, then more rows. (RENAME COLUMN, RENAME TABLE and ALTER COLUMN TYPE are refused by DuckDB on
+# any table with an index, see duckdb/duckdb#17348; ADD COLUMN is the one ALTER that replaces the DataTable.)
+statement ok
+ALTER TABLE t1 ADD COLUMN more INTEGER DEFAULT 1;
+
+statement ok
+INSERT INTO t1 (id, emb) SELECT id, emb FROM sift WHERE id >= 9192 AND id < 9292;
+
+query I
+SELECT id FROM t1 ORDER BY array_distance(emb, ${MARKER_B}::FLOAT[${DIMS}]) LIMIT 1;
+----
+-2
+
+statement ok
+CREATE OR REPLACE TABLE t_copy AS FROM t1;
+
+statement ok
+CREATE OR REPLACE TABLE t_gt AS SELECT id FROM t_copy WHERE emb IS NOT NULL ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+statement ok
+CREATE OR REPLACE TABLE t_idx_res AS SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT ${LIMIT};
+
+query I
+SELECT COUNT(*) >= ${LIMIT} - 1 FROM t_gt JOIN t_idx_res USING (id);
+----
+true
+
+query II
+CALL pdxearch_sync_index('t1_idx');
+----
+t1_idx	false
+
+statement ok
+DROP INDEX t1_idx;
+
+endloop

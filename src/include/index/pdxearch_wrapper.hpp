@@ -85,6 +85,12 @@ public:
 	virtual uint64_t GetInMemorySizeInBytes() const = 0;
 };
 
+// A DuckDB row group: the rows [row_start, row_start + count).
+struct PDXearchRowGroupBounds {
+	row_t row_start;
+	idx_t count;
+};
+
 // The index of one DuckDB row group: the rows [row_start, row_end).
 struct PDXRowGroup {
 	row_t row_start;
@@ -187,6 +193,30 @@ public:
 		return unique_ptr<PDX::IIterativeSearch>(search_cursor.release());
 	}
 
+	// Maintenance, one writer at a time (the index's exclusive lock). The row belongs to the DuckDB row group that
+	// `row_groups[row_group_idx]` mirrors; the row group's end grows with it.
+	void AppendRow(const idx_t row_group_idx, const row_t row_id, const float *const transformed_embedding) {
+		auto &row_group = *row_groups[row_group_idx];
+		D_ASSERT(row_id >= row_group.row_start);
+		if (row_group.index->GetRowIdMapping(static_cast<size_t>(row_id)).first != PDX::DELETED_MARKER) {
+			// Already indexed by a rebuild of this row group.
+			return;
+		}
+		row_group.index->Append(static_cast<size_t>(row_id), transformed_embedding);
+		row_group.row_end = MaxValue<row_t>(row_group.row_end, row_id + 1);
+		auto flat_index = dynamic_cast<PDX::FlatIndex *>(row_group.index.get());
+		if (flat_index && flat_index->GetClusterSize(0) >= MIN_EMBEDDINGS_FOR_CLUSTERING) {
+			PromoteToIVF(row_group, *flat_index);
+		}
+	}
+
+	void DeleteRow(const row_t row_id) {
+		const auto row_group_idx = LookupRowGroup(row_id);
+		if (row_group_idx.IsValid()) {
+			row_groups[row_group_idx.GetIndex()]->index->Delete(static_cast<size_t>(row_id));
+		}
+	}
+
 	// Position in `row_groups` of the row group holding row_id.
 	optional_idx LookupRowGroup(const row_t row_id) const {
 		auto it = std::upper_bound(row_groups.begin(), row_groups.end(), row_id,
@@ -203,6 +233,53 @@ public:
 
 	const PDXRowGroup &GetRowGroup(const idx_t row_group_idx) const {
 		return *row_groups[row_group_idx];
+	}
+
+	// The DuckDB row groups whose mirrors no longer match them (a checkpoint merged partial row groups; row ids do not
+	// move, row-group membership does), plus mirrors of row groups that are gone from the table. A row group is
+	// mirrored correctly by no row group at all (every embedding NULL) or by exactly one starting with it and ending
+	// within it.
+	std::vector<PDXearchRowGroupBounds>
+	FindStaleRowGroups(const std::vector<PDXearchRowGroupBounds> &physical_row_groups) const {
+		std::vector<PDXearchRowGroupBounds> stale;
+		idx_t mirror_idx = 0;
+		row_t table_end = 0;
+		for (const auto &physical : physical_row_groups) {
+			const row_t physical_end = physical.row_start + static_cast<row_t>(physical.count);
+			table_end = physical_end;
+			idx_t overlapping = 0;
+			bool aligned = true;
+			while (mirror_idx < row_groups.size() && row_groups[mirror_idx]->row_start < physical_end) {
+				const auto &mirror = *row_groups[mirror_idx];
+				if (mirror.row_end > physical.row_start) {
+					overlapping++;
+					aligned = aligned && mirror.row_start == physical.row_start && mirror.row_end <= physical_end;
+				}
+				if (mirror.row_end > physical_end) {
+					break; // Also overlaps the next row group, which is then flagged as well.
+				}
+				mirror_idx++;
+			}
+			if (overlapping > 1 || (overlapping == 1 && !aligned)) {
+				stale.push_back(physical);
+			}
+		}
+		for (; mirror_idx < row_groups.size(); mirror_idx++) {
+			const auto &mirror = *row_groups[mirror_idx];
+			if (mirror.row_start >= table_end) {
+				stale.push_back({mirror.row_start, static_cast<idx_t>(mirror.row_end - mirror.row_start)});
+			}
+		}
+		return stale;
+	}
+
+	void RemoveRowGroupsOverlapping(const row_t start, const row_t end) {
+		const std::lock_guard<std::mutex> lock(row_groups_mutex);
+		row_groups.erase(std::remove_if(row_groups.begin(), row_groups.end(),
+		                                [&](const unique_ptr<PDXRowGroup> &row_group) {
+			                                return row_group->row_start < end && row_group->row_end > start;
+		                                }),
+		                 row_groups.end());
 	}
 
 	idx_t GetTotalNumClusters() const {
@@ -228,8 +305,7 @@ public:
 	}
 
 private:
-	unique_ptr<PDX::IPDXIndex> BuildRowGroupIndex(const PDXRowGroup &row_group, const row_t *const row_ids,
-	                                              const float *const embeddings, const idx_t num_embeddings) const {
+	PDX::PDXIndexConfig MakeIndexConfig(const row_t row_start, const idx_t num_embeddings) const {
 		PDX::PDXIndexConfig config;
 		config.num_dimensions = GetNumDimensions();
 		config.distance_metric = GetDistanceMetric();
@@ -239,21 +315,35 @@ private:
 		config.hierarchical_indexing = true;
 		config.n_threads = 1;
 		config.is_data_transformed = true;
-		config.base_row_id = static_cast<size_t>(row_group.row_start);
+		config.base_row_id = static_cast<size_t>(row_start);
+		return config;
+	}
 
+	unique_ptr<PDX::IPDXIndex> BuildRowGroupIndex(const PDXRowGroup &row_group, const row_t *const row_ids,
+	                                              const float *const embeddings, const idx_t num_embeddings) const {
+		const auto config = MakeIndexConfig(row_group.row_start, num_embeddings);
 		std::vector<size_t> ids(num_embeddings);
 		for (idx_t i = 0; i < num_embeddings; i++) {
 			ids[i] = static_cast<size_t>(row_ids[i]);
 		}
 
 		if (num_embeddings < MIN_EMBEDDINGS_FOR_CLUSTERING) {
-			auto flat = make_uniq<PDX::FlatIndex>(config, *row_group.pruner);
-			flat->BuildIndex(ids.data(), embeddings, num_embeddings);
-			return std::move(flat);
+			auto flat_index = make_uniq<PDX::FlatIndex>(config, *row_group.pruner);
+			flat_index->BuildIndex(ids.data(), embeddings, num_embeddings);
+			return std::move(flat_index);
 		}
-		auto ivf = make_uniq<PDX::PDXIndex<Q>>(config, *row_group.pruner);
-		ivf->BuildIndex(ids.data(), embeddings, num_embeddings);
-		return std::move(ivf);
+		auto ivf_index = make_uniq<PDX::PDXIndex<Q>>(config, *row_group.pruner);
+		ivf_index->BuildIndex(ids.data(), embeddings, num_embeddings);
+		return std::move(ivf_index);
+	}
+
+	void PromoteToIVF(PDXRowGroup &row_group, const PDX::FlatIndex &flat_index) {
+		const auto row_ids = flat_index.GetRowIds();
+		const auto embeddings = flat_index.GetEmbeddings();
+		auto ivf_index =
+		    make_uniq<PDX::PDXIndex<Q>>(MakeIndexConfig(row_group.row_start, row_ids.size()), *row_group.pruner);
+		ivf_index->BuildIndex(row_ids.data(), embeddings.get(), row_ids.size());
+		row_group.index = std::move(ivf_index);
 	}
 };
 

@@ -1,0 +1,70 @@
+# name: test/sql/maintenance/index_sync.test
+# description: CALL pdxearch_sync_index indexes the rows committed since the last search eagerly, and reports whether
+#              there was anything to do.
+# group: [maintenance]
+
+require parquet
+
+require pdxearch
+
+# A database with small row groups keeps the multi-row-group layouts cheap; no automatic checkpoint may merge
+# row groups halfway through the test.
+statement ok
+ATTACH '__TEST_DIR__/sync.db' AS sync (ROW_GROUP_SIZE 8192);
+
+statement ok
+USE sync;
+
+statement ok
+SET late_materialization_max_rows = 0;
+
+statement ok
+SET checkpoint_threshold = '10GB';
+
+# Variables
+test-env DIMS 128
+
+test-env LIMIT 10
+
+test-env MARKER_A [200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200]
+
+statement ok
+CREATE TABLE sift AS SELECT id, emb::FLOAT[${DIMS}] AS emb FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') WHERE id < 32768;
+
+statement ok
+CREATE TABLE t1 AS SELECT * FROM sift WHERE id < 20000;
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (metric = 'l2sq', quantization = 'f32', n_probe = 0, seed = 0);
+
+# Nothing committed since the build.
+query II
+CALL pdxearch_sync_index('t1_idx');
+----
+t1_idx	false
+
+statement ok
+INSERT INTO t1 SELECT * FROM sift WHERE id >= 20000 AND id < 20100;
+
+statement ok
+INSERT INTO t1 VALUES (-1, ${MARKER_A}::FLOAT[${DIMS}]);
+
+query II
+CALL pdxearch_sync_index('t1_idx');
+----
+t1_idx	true
+
+query II
+CALL pdxearch_sync_index('t1_idx');
+----
+t1_idx	false
+
+query I
+SELECT id FROM t1 ORDER BY array_distance(emb, ${MARKER_A}::FLOAT[${DIMS}]) LIMIT 1;
+----
+-1
+
+statement error
+CALL pdxearch_sync_index('no_such_index');
+----
+not found

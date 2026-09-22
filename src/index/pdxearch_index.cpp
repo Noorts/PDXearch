@@ -1,6 +1,10 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/storage/table/row_group_collection.hpp"
 #include "duckdb/storage/table/row_group_segment_tree.hpp"
+#include "duckdb/storage/table/scan_state.hpp"
+#include "duckdb/storage/table_io_manager.hpp"
+#include "duckdb/transaction/duck_transaction_manager.hpp"
+#include "duckdb/transaction/transaction_data.hpp"
 #include "pdx/common.hpp"
 #include "index/pdxearch_index.hpp"
 
@@ -14,13 +18,12 @@ PDXearchIndex::PDXearchIndex(const string &name, IndexConstraintType index_const
                              const vector<column_t> &column_ids, TableIOManager &table_io_manager,
                              const vector<unique_ptr<Expression>> &unbound_expressions, AttachedDatabase &db,
                              const case_insensitive_map_t<Value> &index_creation_options,
-                             const IndexStorageInfo &persistence_info, optional_ptr<DataTable> table_p)
-    : BoundIndex(name, TYPE_NAME, index_constraint_type, column_ids, table_io_manager, unbound_expressions, db),
-      table(table_p) {
+                             const IndexStorageInfo &persistence_info)
+    : BoundIndex(name, TYPE_NAME, index_constraint_type, column_ids, table_io_manager, unbound_expressions, db) {
 	if (index_constraint_type != IndexConstraintType::NONE) {
 		throw NotImplementedException("PDXearch indexes do not support unique or primary key constraints");
 	}
-	if (!table) {
+	if (persistence_info.IsValid()) {
 		throw InternalException(
 		    "Something went wrong: the PDXearch index was created without its table. This is likely because a "
 		    "malformed persisted index was loaded. Index persistence is not supported yet, but DuckDB will still "
@@ -69,7 +72,7 @@ PDXearchIndex::PDXearchIndex(const string &name, IndexConstraintType index_const
 		seed = seed_opt->second.GetValue<int32_t>();
 	}
 
-	const idx_t row_group_size = table->GetRowGroupSize();
+	const idx_t row_group_size = table_io_manager.GetRowGroupSize();
 	if (quantization == PDX::Quantization::F32) {
 		D_ASSERT(ArrayType::GetChildType(embedding_type).id() == LogicalTypeId::FLOAT);
 
@@ -81,22 +84,35 @@ PDXearchIndex::PDXearchIndex(const string &name, IndexConstraintType index_const
 	}
 
 	function_matcher = MakeFunctionMatcher(*pdxearch_wrapper.get());
+	embedding_preprocessor = make_uniq<EmbeddingPreprocessor>(num_dimensions, pdxearch_wrapper->GetRotationMatrix());
 }
 
 /******************************************************************
  * Index creation and search methods specific to the parallel implementation
  ******************************************************************/
 
-unique_ptr<StorageLockKey> PDXearchIndex::TakeSearchLock() {
+bool PDXearchIndex::IsInSyncWithTable(DataTable &table) const {
+	return !has_unindexed_rows && FindStaleRowGroups(table).empty();
+}
+
+unique_ptr<StorageLockKey> PDXearchIndex::SyncAndLockForSearch(DataTable &table) {
+	bool in_sync;
+	{
+		auto _lock = rwlock.GetSharedLock();
+		in_sync = IsInSyncWithTable(table);
+	}
+	if (!in_sync) {
+		SyncWithTable(table);
+	}
 	return rwlock.GetSharedLock();
 }
 
 idx_t PDXearchIndex::GetRowGroupSize() const {
-	return table->GetRowGroupSize();
+	return table_io_manager.GetRowGroupSize();
 }
 
-bool PDXearchIndex::TryGetPhysicalRowGroup(const row_t row_id, PDXearchRowGroupBounds &result) const {
-	auto row_groups = table->GetRowGroupCollection()->GetRowGroups();
+bool PDXearchIndex::TryGetPhysicalRowGroup(DataTable &table, const row_t row_id, PDXearchRowGroupBounds &result) const {
+	auto row_groups = table.GetRowGroupCollection()->GetRowGroups();
 	auto lock = row_groups->Lock();
 	idx_t segment_index;
 	if (!row_groups->TryGetSegmentIndex(lock, static_cast<idx_t>(row_id), segment_index)) {
@@ -107,9 +123,9 @@ bool PDXearchIndex::TryGetPhysicalRowGroup(const row_t row_id, PDXearchRowGroupB
 	return true;
 }
 
-vector<PDXearchRowGroupBounds> PDXearchIndex::GetPhysicalRowGroups() const {
+vector<PDXearchRowGroupBounds> PDXearchIndex::GetPhysicalRowGroups(DataTable &table) const {
 	vector<PDXearchRowGroupBounds> result;
-	auto row_groups = table->GetRowGroupCollection()->GetRowGroups();
+	auto row_groups = table.GetRowGroupCollection()->GetRowGroups();
 	auto lock = row_groups->Lock();
 	for (auto node = row_groups->GetRootSegment(lock); node; node = row_groups->GetNextSegment(lock, *node)) {
 		result.push_back({static_cast<row_t>(node->GetRowStart()), node->GetCount()});
@@ -122,6 +138,163 @@ optional_idx PDXearchIndex::LookupRowGroup(const row_t row_id) const {
 		return static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())->LookupRowGroup(row_id);
 	}
 	return static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())->LookupRowGroup(row_id);
+}
+
+void PDXearchIndex::AppendRow(const idx_t row_group_idx, const row_t row_id, const float *const transformed_embedding) {
+	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())
+		    ->AppendRow(row_group_idx, row_id, transformed_embedding);
+	} else {
+		static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())
+		    ->AppendRow(row_group_idx, row_id, transformed_embedding);
+	}
+}
+
+void PDXearchIndex::DeleteRow(const row_t row_id) {
+	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())->DeleteRow(row_id);
+	} else {
+		static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())->DeleteRow(row_id);
+	}
+}
+
+vector<PDXearchRowGroupBounds> PDXearchIndex::FindStaleRowGroups(DataTable &table) const {
+	const auto physical_row_groups = GetPhysicalRowGroups(table);
+	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+		return static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())->FindStaleRowGroups(physical_row_groups);
+	}
+	return static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())->FindStaleRowGroups(physical_row_groups);
+}
+
+void PDXearchIndex::RemoveRowGroupsOverlapping(const row_t start, const row_t end) {
+	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())->RemoveRowGroupsOverlapping(start, end);
+	} else {
+		static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())->RemoveRowGroupsOverlapping(start, end);
+	}
+}
+
+idx_t PDXearchIndex::FetchRows(DataTable &table, const row_t start, const row_t end, row_t *const row_ids,
+                               float *const embeddings, idx_t &rows_returned) {
+	rows_returned = 0;
+	// Every committed row, whatever the calling transaction's snapshot, like DuckDB's own index rebuild: the mirror
+	// holds the committed state, and rows a query must not see are dropped when it fetches its results.
+	const TransactionData committed(MAX_TRANSACTION_ID, DuckTransactionManager::Get(db).GetLastCommit() + 1);
+	const vector<StorageIndex> fetch_column_ids {StorageIndex(GetColumnIds()[0]), StorageIndex()};
+	DataChunk fetched;
+	fetched.Initialize(Allocator::Get(db), {logical_types[0], LogicalType::ROW_TYPE});
+	Vector fetch_row_ids(LogicalType::ROW_TYPE, STANDARD_VECTOR_SIZE);
+	const auto fetch_row_ids_data = FlatVector::GetData<row_t>(fetch_row_ids);
+	ColumnFetchState fetch_state;
+	const auto num_dimensions = GetNumDimensions();
+	auto raw_embeddings = make_uniq_array<float>(STANDARD_VECTOR_SIZE * num_dimensions);
+
+	idx_t count = 0;
+	for (row_t batch_start = start; batch_start < end; batch_start += STANDARD_VECTOR_SIZE) {
+		const idx_t batch_size = MinValue<idx_t>(STANDARD_VECTOR_SIZE, static_cast<idx_t>(end - batch_start));
+		for (idx_t i = 0; i < batch_size; i++) {
+			fetch_row_ids_data[i] = batch_start + static_cast<row_t>(i);
+		}
+		fetched.Reset();
+		// Deleted rows are gone, NULL embeddings are NULL.
+		table.GetRowGroupCollection()->Fetch(committed, fetched, fetch_column_ids, fetch_row_ids, batch_size,
+		                                     fetch_state);
+		const idx_t fetched_count = fetched.size();
+		rows_returned += fetched_count;
+		if (fetched_count == 0) {
+			continue;
+		}
+		auto &embedding_column = fetched.data[0];
+		embedding_column.Flatten(fetched_count);
+		fetched.data[1].Flatten(fetched_count);
+		const auto &validity = FlatVector::Validity(embedding_column);
+		const auto fetched_embeddings = FlatVector::GetData<float>(ArrayVector::GetEntry(embedding_column));
+		const auto fetched_row_ids = FlatVector::GetData<row_t>(fetched.data[1]);
+		idx_t batch_count = 0;
+		for (idx_t i = 0; i < fetched_count; i++) {
+			if (!validity.RowIsValid(i)) {
+				continue;
+			}
+			memcpy(raw_embeddings.get() + batch_count * num_dimensions, fetched_embeddings + i * num_dimensions,
+			       num_dimensions * sizeof(float));
+			row_ids[count + batch_count] = fetched_row_ids[i];
+			batch_count++;
+		}
+		if (batch_count > 0) {
+			embedding_preprocessor->PreprocessEmbeddings(raw_embeddings.get(), embeddings + count * num_dimensions,
+			                                             batch_count, IsNormalized());
+			count += batch_count;
+		}
+	}
+	return count;
+}
+
+void PDXearchIndex::SyncWithTable(DataTable &table) {
+	auto _lock = rwlock.GetExclusiveLock();
+
+	// One DuckDB row group of transformed embeddings at a time, like the create sink.
+	const auto num_dimensions = GetNumDimensions();
+	auto embeddings = make_uniq_array<float>(GetRowGroupSize() * num_dimensions);
+	auto row_ids = make_uniq_array<row_t>(GetRowGroupSize());
+
+	// Row groups a checkpoint merged or dropped: their mirrors go, and the ones still in the table are rebuilt.
+	idx_t rows_returned;
+	for (const auto &stale : FindStaleRowGroups(table)) {
+		RemoveRowGroupsOverlapping(stale.row_start, stale.row_start + static_cast<row_t>(stale.count));
+		PDXearchRowGroupBounds bounds;
+		if (!TryGetPhysicalRowGroup(table, stale.row_start, bounds)) {
+			continue;
+		}
+		const idx_t count = FetchRows(table, bounds.row_start, bounds.row_start + static_cast<row_t>(bounds.count),
+		                              row_ids.get(), embeddings.get(), rows_returned);
+		if (count > 0) {
+			SetUpIndexForRowGroup(row_ids.get(), embeddings.get(), count, bounds.row_start, bounds.count);
+		}
+	}
+
+	// Unindexed rows, gathered per DuckDB row group: a row group without a mirror is clustered once from all of its
+	// rows. Each range is retired on its own because rows of one commit become visible together.
+	std::vector<PDXearchRowRange> still_unindexed;
+	idx_t range_idx = 0;
+	while (range_idx < unindexed_row_ranges.size()) {
+		PDXearchRowGroupBounds bounds;
+		if (!TryGetPhysicalRowGroup(table, unindexed_row_ranges[range_idx].start, bounds)) {
+			// The rows are not in the table yet: their commit is still in flight.
+			still_unindexed.push_back(unindexed_row_ranges[range_idx++]);
+			continue;
+		}
+		const row_t bounds_end = bounds.row_start + static_cast<row_t>(bounds.count);
+		idx_t count = 0;
+		while (range_idx < unindexed_row_ranges.size() && unindexed_row_ranges[range_idx].start < bounds_end) {
+			auto &range = unindexed_row_ranges[range_idx];
+			const row_t sub_end = MinValue<row_t>(range.end, bounds_end);
+			const idx_t range_count = FetchRows(table, range.start, sub_end, row_ids.get() + count,
+			                                    embeddings.get() + count * num_dimensions, rows_returned);
+			if (rows_returned == 0) {
+				// Not committed yet: a later sync indexes them.
+				still_unindexed.push_back({range.start, sub_end});
+			}
+			count += range_count;
+			if (sub_end < range.end) {
+				range.start = sub_end;
+				break;
+			}
+			range_idx++;
+		}
+		if (count == 0) {
+			continue;
+		}
+		const auto row_group_idx = LookupRowGroup(bounds.row_start);
+		if (row_group_idx.IsValid()) {
+			for (idx_t i = 0; i < count; i++) {
+				AppendRow(row_group_idx.GetIndex(), row_ids[i], embeddings.get() + i * num_dimensions);
+			}
+		} else {
+			SetUpIndexForRowGroup(row_ids.get(), embeddings.get(), count, bounds.row_start, bounds.count);
+		}
+	}
+	unindexed_row_ranges = std::move(still_unindexed);
+	has_unindexed_rows = !unindexed_row_ranges.empty();
 }
 
 void PDXearchIndex::SetUpIndexForRowGroup(const row_t *const row_ids, const float *const vectors,
@@ -152,24 +325,75 @@ PDXearchIndex::BeginSearchForRowGroup(const idx_t row_group_idx, const float *co
  ******************************************************************/
 
 ErrorData PDXearchIndex::Append(IndexLock &lock, DataChunk &entries, Vector &row_ids) {
-	// Execute all column expressions before inserting the data chunk.
-	DataChunk expr_chunk;
-	expr_chunk.Initialize(Allocator::DefaultAllocator(), logical_types);
-	ExecuteExpressions(entries, expr_chunk);
-	// Now insert the data chunk.
-	return Insert(lock, expr_chunk, row_ids);
+	// Only the row ids are needed, so the index expressions are not evaluated.
+	return Insert(lock, entries, row_ids);
 }
 
+// Called by DuckDB at commit with the final row ids, before the rows enter the table's row groups. Which row group
+// they land in is not knowable here, so only the ids are recorded; SyncWithTable indexes them once the table knows.
 ErrorData PDXearchIndex::Insert(IndexLock &lock, DataChunk &data, Vector &row_ids) {
 	auto _lock = rwlock.GetExclusiveLock();
 
-	throw NotImplementedException("PDXearchIndex::Insert() not implemented");
+	const idx_t count = data.size();
+	if (count == 0) {
+		return ErrorData();
+	}
+	row_ids.Flatten(count);
+	const auto row_id_data = FlatVector::GetData<row_t>(row_ids);
+
+	PDXearchRowRange range {row_id_data[0], row_id_data[0] + 1};
+	for (idx_t i = 1; i < count; i++) {
+		if (row_id_data[i] == range.end) {
+			range.end++;
+			continue;
+		}
+		unindexed_row_ranges.push_back(range);
+		range = {row_id_data[i], row_id_data[i] + 1};
+	}
+	unindexed_row_ranges.push_back(range);
+	has_unindexed_rows = true;
+	return ErrorData();
 }
 
+// Called by DuckDB at commit. Row ids that are not in the index (never indexed, or reverted before they were) are
+// skipped.
 void PDXearchIndex::Delete(IndexLock &lock, DataChunk &entries, Vector &row_ids) {
 	auto _lock = rwlock.GetExclusiveLock();
 
-	throw NotImplementedException("PDXearchIndex::Delete() not implemented");
+	const idx_t count = entries.size();
+	row_ids.Flatten(count);
+	const auto row_id_data = FlatVector::GetData<row_t>(row_ids);
+	for (idx_t i = 0; i < count; i++) {
+		DeleteRow(row_id_data[i]);
+		RemoveUnindexedRow(row_id_data[i]);
+	}
+	has_unindexed_rows = !unindexed_row_ranges.empty();
+}
+
+// A deleted row that was never indexed has nothing left to index: take it out of its staged range.
+void PDXearchIndex::RemoveUnindexedRow(const row_t row_id) {
+	auto it = std::upper_bound(unindexed_row_ranges.begin(), unindexed_row_ranges.end(), row_id,
+	                           [](row_t id, const PDXearchRowRange &range) { return id < range.start; });
+	if (it == unindexed_row_ranges.begin()) {
+		return;
+	}
+	--it;
+	if (row_id >= it->end) {
+		return;
+	}
+	if (it->start == row_id) {
+		it->start++;
+	} else if (it->end == row_id + 1) {
+		it->end--;
+	} else {
+		const PDXearchRowRange tail {row_id + 1, it->end};
+		it->end = row_id;
+		unindexed_row_ranges.insert(it + 1, tail);
+		return;
+	}
+	if (it->start == it->end) {
+		unindexed_row_ranges.erase(it);
+	}
 }
 
 void PDXearchIndex::ResetStorage(IndexLock &lock) {

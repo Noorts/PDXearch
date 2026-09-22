@@ -28,8 +28,7 @@ public:
 	explicit CreatePDXearchIndexGlobalSinkState(const PhysicalCreatePDXearchIndex &op)
 	    : global_index(make_uniq<PDXearchIndex>(op.info->index_name, op.info->constraint_type, op.storage_ids,
 	                                            TableIOManager::Get(op.table.GetStorage()), op.unbound_expressions,
-	                                            op.table.GetStorage().db, op.info->options, IndexStorageInfo(),
-	                                            &op.table.GetStorage())),
+	                                            op.table.GetStorage().db, op.info->options, IndexStorageInfo())),
 	      num_dimensions(ArrayType::GetSize(op.unbound_expressions[0]->return_type)),
 	      embedding_preprocessor(make_uniq<EmbeddingPreprocessor>(
 	          num_dimensions, global_index->Cast<PDXearchIndex>().GetRotationMatrix())),
@@ -106,7 +105,7 @@ SinkResultType PhysicalCreatePDXearchIndex::Sink(ExecutionContext &context, Data
 
 	// A chunk never spans two DuckDB row groups, so the first row id tells which one this chunk belongs to.
 	PDXearchRowGroupBounds row_group;
-	if (!pdxearch_index.TryGetPhysicalRowGroup(row_id_data[0], row_group)) {
+	if (!pdxearch_index.TryGetPhysicalRowGroup(table.GetStorage(), row_id_data[0], row_group)) {
 		throw InternalException("PDXearch: row id %lld is not in any row group of the table", row_id_data[0]);
 	}
 	D_ASSERT(!l_sink.has_row_group || l_sink.row_group.row_start <= row_group.row_start);
