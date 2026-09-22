@@ -85,13 +85,11 @@ public:
 	virtual uint64_t GetInMemorySizeInBytes() const = 0;
 };
 
-// A DuckDB row group: the rows [row_start, row_start + count).
 struct PDXearchRowGroupBounds {
 	row_t row_start;
 	idx_t count;
 };
 
-// The index of one DuckDB row group: the rows [row_start, row_end).
 struct PDXRowGroup {
 	row_t row_start;
 	row_t row_end;
@@ -114,6 +112,7 @@ private:
 	// Sorted by row_start. Structural changes only happen during the index build and under the index's exclusive lock,
 	// so scans read it without locking.
 	std::vector<unique_ptr<PDXRowGroup>> row_groups;
+	// Lock for the above vector structure.
 	std::mutex row_groups_mutex;
 
 public:
@@ -158,9 +157,13 @@ public:
 			auto it =
 			    std::lower_bound(row_groups.begin(), row_groups.end(), row_start,
 			                     [](const unique_ptr<PDXRowGroup> &rg, row_t start) { return rg->row_start < start; });
+			// Rare case: If the row group already exists, we will append to it
+			// This happens when parallel scan hands rows of the same rowgroup to more than one task
 			if (it != row_groups.end() && (*it)->row_start == row_start) {
 				row_group = it->get();
 			} else {
+				// Common path:
+				// No rowgroup index exists yet: create one and build the index under its mutex.
 				auto new_row_group = make_uniq<PDXRowGroup>();
 				new_row_group->row_start = row_start;
 				new_row_group->row_end = row_start + static_cast<row_t>(count);
@@ -175,6 +178,7 @@ public:
 			row_group->index = BuildRowGroupIndex(*row_group, row_ids, embeddings, num_embeddings);
 			return;
 		}
+		// Rare path
 		// Only reached when DuckDB splits a row group over several scan tasks (e.g. PRAGMA verify_parallelism hands
 		// out one vector per task): the first batch built the index above, the later ones are appended to it.
 		const std::lock_guard<std::mutex> lock(row_group->mutex);
@@ -195,11 +199,14 @@ public:
 
 	// Maintenance, one writer at a time (the index's exclusive lock). The row belongs to the DuckDB row group that
 	// `row_groups[row_group_idx]` mirrors; the row group's end grows with it.
+	// If the rowgroup is a Flat index and it has enough embeddings, it is promoted to an IVF index.
 	void AppendRow(const idx_t row_group_idx, const row_t row_id, const float *const transformed_embedding) {
 		auto &row_group = *row_groups[row_group_idx];
 		D_ASSERT(row_id >= row_group.row_start);
+		// Rare: a rebuild of this row group (e.g., a checkpoint merge) ran earlier in the same
+		// sync and fetched all its committed rows, including (some) staged ones. The staged range now
+		// brings them here a second time.
 		if (row_group.index->GetRowIdMapping(static_cast<size_t>(row_id)).first != PDX::DELETED_MARKER) {
-			// Already indexed by a rebuild of this row group.
 			return;
 		}
 		row_group.index->Append(static_cast<size_t>(row_id), transformed_embedding);
@@ -235,15 +242,13 @@ public:
 		return *row_groups[row_group_idx];
 	}
 
-	// The DuckDB row groups whose mirrors no longer match them (a checkpoint merged partial row groups; row ids do not
-	// move, row-group membership does), plus mirrors of row groups that are gone from the table. A row group is
-	// mirrored correctly by no row group at all (every embedding NULL) or by exactly one starting with it and ending
-	// within it.
 	std::vector<PDXearchRowGroupBounds>
 	FindStaleRowGroups(const std::vector<PDXearchRowGroupBounds> &physical_row_groups) const {
 		std::vector<PDXearchRowGroupBounds> stale;
 		idx_t mirror_idx = 0;
 		row_t table_end = 0;
+		// The physical row groups are the ones in the DuckDB table, and the mirror row groups are the ones in the
+		// index.
 		for (const auto &physical : physical_row_groups) {
 			const row_t physical_end = physical.row_start + static_cast<row_t>(physical.count);
 			table_end = physical_end;
@@ -266,6 +271,7 @@ public:
 		}
 		for (; mirror_idx < row_groups.size(); mirror_idx++) {
 			const auto &mirror = *row_groups[mirror_idx];
+			// Mirroring rowgroups that are beyond the end of the table
 			if (mirror.row_start >= table_end) {
 				stale.push_back({mirror.row_start, static_cast<idx_t>(mirror.row_end - mirror.row_start)});
 			}

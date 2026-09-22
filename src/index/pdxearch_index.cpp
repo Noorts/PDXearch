@@ -177,7 +177,7 @@ void PDXearchIndex::RemoveRowGroupsOverlapping(const row_t start, const row_t en
 idx_t PDXearchIndex::FetchRows(DataTable &table, const row_t start, const row_t end, row_t *const row_ids,
                                float *const embeddings, idx_t &rows_returned) {
 	rows_returned = 0;
-	// Every committed row, whatever the calling transaction's snapshot, like DuckDB's own index rebuild: the mirror
+	// Fetches every committed row, whatever the calling transaction's snapshot. The mirror
 	// holds the committed state, and rows a query must not see are dropped when it fetches its results.
 	const TransactionData committed(MAX_TRANSACTION_ID, DuckTransactionManager::Get(db).GetLastCommit() + 1);
 	const vector<StorageIndex> fetch_column_ids {StorageIndex(GetColumnIds()[0]), StorageIndex()};
@@ -364,6 +364,7 @@ void PDXearchIndex::Delete(IndexLock &lock, DataChunk &entries, Vector &row_ids)
 	row_ids.Flatten(count);
 	const auto row_id_data = FlatVector::GetData<row_t>(row_ids);
 	for (idx_t i = 0; i < count; i++) {
+		// PDX Delete is idempotent: if the row was never indexed, it is a no-op
 		DeleteRow(row_id_data[i]);
 		RemoveUnindexedRow(row_id_data[i]);
 	}
@@ -372,25 +373,30 @@ void PDXearchIndex::Delete(IndexLock &lock, DataChunk &entries, Vector &row_ids)
 
 // A deleted row that was never indexed has nothing left to index: take it out of its staged range.
 void PDXearchIndex::RemoveUnindexedRow(const row_t row_id) {
+	// Find staged range [start, end) that contains row_id, if any
 	auto it = std::upper_bound(unindexed_row_ranges.begin(), unindexed_row_ranges.end(), row_id,
 	                           [](row_t id, const PDXearchRowRange &range) { return id < range.start; });
 	if (it == unindexed_row_ranges.begin()) {
 		return;
 	}
 	--it;
+	// row_id is not staged if it falls in a gap
 	if (row_id >= it->end) {
 		return;
 	}
+	// row_id is the first of the range, we just shrink the range by moving the start up one
 	if (it->start == row_id) {
 		it->start++;
-	} else if (it->end == row_id + 1) {
+	} else if (it->end == row_id + 1) { // idem (with the tail)
 		it->end--;
 	} else {
+		// row_id is in the middle of the range, we split it into two ranges
 		const PDXearchRowRange tail {row_id + 1, it->end};
 		it->end = row_id;
 		unindexed_row_ranges.insert(it + 1, tail);
 		return;
 	}
+	// If the range is now empty, remove it
 	if (it->start == it->end) {
 		unindexed_row_ranges.erase(it);
 	}

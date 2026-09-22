@@ -13,9 +13,8 @@
 
 namespace duckdb {
 
-// The rows [start, end).
 struct PDXearchRowRange {
-	row_t start;
+	row_t start; // [start, end)
 	row_t end;
 };
 
@@ -40,22 +39,26 @@ private:
 	unique_ptr<PDXearchWrapper> pdxearch_wrapper;
 	unique_ptr<EmbeddingPreprocessor> embedding_preprocessor;
 
-	// Row ids committed to the table (one range per Append call) whose embeddings are not in the index yet.
-	// SyncWithTable reads the row groups they landed in from the table and fetches them back.
+	// Row ids committed to the table whose embeddings are not in the index yet
 	std::vector<PDXearchRowRange> unindexed_row_ranges;
 	std::atomic<bool> has_unindexed_rows {false};
 
 	void AppendRow(idx_t row_group_idx, row_t row_id, const float *transformed_embedding);
 	void DeleteRow(row_t row_id);
 
-	// The committed rows of [start, end) whose embedding is not NULL, transformed. Returns how many were written;
-	// rows_returned counts every committed row the table returned, NULL embeddings included.
+	// Returns the committed rows of [start, end) whose embedding is not NULL,
+	// We transforme them (random rotation) and returns how many were written to `embeddings`.
+	// `rows_returned` counts every committed row the table returned, NULL embeddings included.
 	idx_t FetchRows(DataTable &table, row_t start, row_t end, row_t *row_ids, float *embeddings, idx_t &rows_returned);
-	// Row groups whose mirrors must be dropped and, if the row group still exists, rebuilt from the table.
+	// Find row groups whose mirrors are stale:
+	// - DuckDB merged two or more row groups into one
+	// - DuckDB dropped a rowgroup (e.g., VACUUM, CHECKPOINT merging)
 	vector<PDXearchRowGroupBounds> FindStaleRowGroups(DataTable &table) const;
 	void RemoveRowGroupsOverlapping(row_t start, row_t end);
 	void RemoveUnindexedRow(row_t row_id);
-	// No unindexed rows and every mirrored row group matches its DuckDB row group.
+	// A table is in sync if:
+	// - No unindexed rows
+	// - Every mirrored row group matches its DuckDB row group.
 	bool IsInSyncWithTable(DataTable &table) const;
 
 	unique_ptr<ExpressionMatcher> function_matcher;
@@ -85,16 +88,15 @@ public:
 	 ******************************************************************/
 
 	// Syncs the index with the table if it is out of date, then returns the shared lock a search holds while it runs.
-	// The table is passed in on every call: ALTER TABLE replaces the DataTable while the index object lives on.
 	unique_ptr<StorageLockKey> SyncAndLockForSearch(DataTable &table);
 
 	bool HasUnindexedRows() const {
 		return has_unindexed_rows;
 	}
 
-	// Rebuilds the mirrors of row groups a checkpoint merged or dropped, then fetches the unindexed rows back from
-	// the table, one DuckDB row group at a time, and builds or extends the mirrored row group. Rows whose commit is
-	// still in flight stay unindexed.
+	// Detect and rebuild rowgroups whose mirrors no longer match the table rowgroups.
+	// Append unindexed rows to the index, and retire them from the unindexed list
+	// Rows whose commit is still in flight stay unindexed.
 	void SyncWithTable(DataTable &table);
 
 	idx_t GetRowGroupSize() const;
@@ -110,7 +112,7 @@ public:
 	void SetUpIndexForRowGroup(const row_t *row_ids, const float *embeddings, idx_t num_embeddings, row_t row_start,
 	                           idx_t count);
 
-	// passing_row_ids are size_t because they go straight into PDX's IPDXIndex::BeginIterativeSearch.
+	// !`passing_row_ids` are size_t because they go straight into PDX's IPDXIndex::BeginIterativeSearch.
 	unique_ptr<PDX::IIterativeSearch> BeginSearchForRowGroup(idx_t row_group_idx,
 	                                                         const float *preprocessed_query_embedding, idx_t limit,
 	                                                         PDX::TopKHeap &top_k_heap,
