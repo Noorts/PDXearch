@@ -68,7 +68,7 @@ official VSS extension ([VSS docs](https://duckdb.org/docs/stable/core_extension
     LOAD '<Fill in>/PDXearch/build/release/extension/pdxearch/pdxearch.duckdb_extension';
     ```
 
-3. Ensure you have a table with a fixed-sized `FLOAT[num-dims]` column for your embeddings (below called `embedding`). The table can have any number of other columns. We currently do not support `NULL` values in the `embedding` column.
+3. Ensure you have a table with a fixed-sized `FLOAT[num-dims]` column for your embeddings (below called `embedding`). The table can have any number of other columns. Rows whose `embedding` is `NULL` are not indexed, so an index scan never returns them, not even when fewer than K rows with an embedding match the query (a search without the index would list them last).
 
     ```sql
     CREATE TABLE t1 (id INTEGER, embedding FLOAT[512]);
@@ -134,6 +134,8 @@ DuckDB by default will use all available threads. To set the number of threads t
 
 Before running a search query, you can set the number of clusters to probe to 48 using `SET pdxearch_n_probe = 48`. This will temporarily overwrite the `n_probe` value stored in the index. Use `RESET pdxearch_n_probe` to unset this overwrite. For more information, see the `n_probe` description above.
 
+The index is used for queries of the form `ORDER BY <distance function>(embedding, <constant query vector>) [ASC] LIMIT k [OFFSET o]`. With an `OFFSET`, the index searches the `k + o` nearest neighbours and DuckDB skips the first `o`. Orders that put `NULL` distances first (`NULLS FIRST`, or `SET default_null_order = 'nulls_first'`), descending orders and additional `ORDER BY` keys run without the index.
+
 Prepend your search query with `EXPLAIN` to show the optimized query plan of your vector search query. Optimized query plans will include a `PDXEARCH_INDEX_SCAN` or a `PDXEARCH_INDEX_FILT_SCAN` operator. For more information about `EXPLAIN` see the [DuckDB documentation](https://duckdb.org/docs/stable/guides/meta/explain).
 
 #### Index Metadata
@@ -163,14 +165,15 @@ As mentioned above, we aim to address all of these limitations soon.
   search rebuilds the affected part of the index from the table.
 
 - **Late materialization and filter types**: As noted above, we don't optimally
-  handle DuckDB's late materialization optimizer rule yet. Furthermore, on a
-  related note, we currently only support filtered vector similarity queries
-  where DuckDB pushes the entire filter down into the sequential scan. This is
-  not a limitation of our design. We plan to adjust our scan optimizer such that
-  we can process SQL queries with arbitrary predicates. You can check whether
-  your query is currently being optimized by prepending the `EXPLAIN` keyword to
-  your search query and checking if a PDXearch operator is part of the query
-  plan.
+  handle DuckDB's late materialization optimizer rule yet. Filtered searches
+  support any predicate on the indexed table's own columns that DuckDB evaluates
+  in the table scan or in filter operators directly above it (e.g. comparisons,
+  `OR`s across columns, expressions over several columns). Predicates that DuckDB
+  plans as joins (`IN` lists of many constants, `IN` and `EXISTS` subqueries),
+  searches over views or subqueries that select from the table, and joins with
+  other tables still run without the index. You can check whether your query is
+  currently being optimized by prepending the `EXPLAIN` keyword to your search
+  query and checking if a PDXearch operator is part of the query plan.
 
 - **Configuration options**: The available [configuration options](#configuration) are currently
   limited (e.g., quantization, distance functions, normalization).

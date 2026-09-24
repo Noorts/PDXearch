@@ -1,0 +1,247 @@
+# name: test/sql/filtered_search/index_filtered_scan_residual_filters.test
+# description: Predicates DuckDB keeps in FILTER operators above the table scan (it cannot push them into the scan) feed
+#              the filtered index search: the filters stay below the search, only the rowids of the passing rows reach
+#              it, and the results equal the brute-force search.
+# group: [filtered_search]
+
+require parquet
+
+require pdxearch
+
+# Row groups of 8192 rows (4 in the table), so selective filters glue the rows of several row groups into one chunk.
+statement ok
+ATTACH '__TEST_DIR__/residual_filters.db' AS residual_filters (ROW_GROUP_SIZE 8192);
+
+statement ok
+USE residual_filters;
+
+statement ok
+SET late_materialization_max_rows = 0;
+
+statement ok
+SET checkpoint_threshold = '10GB';
+
+# Variables
+test-env DIMS 128
+
+test-env QUERY_EMB [0,16,35,5,32,31,14,10,11,78,55,10,45,83,11,6,14,57,102,75,20,8,3,5,67,17,19,26,5,0,1,22,60,26,7,1,18,22,84,53,85,119,119,4,24,18,7,7,1,81,106,102,72,30,6,0,9,1,9,119,72,1,4,33,119,29,6,1,0,1,14,52,119,30,3,0,0,55,92,111,2,5,4,9,22,89,96,14,1,0,1,82,59,16,20,5,25,14,11,4,0,0,1,26,47,23,4,0,0,4,38,83,30,14,9,4,9,17,23,41,0,0,2,8,19,25,23,1]
+
+# t is indexed; t_bf is an unindexed copy whose searches give the brute-force result.
+statement ok
+CREATE TABLE t AS SELECT id, (id % 10)::INTEGER AS cat, 'n' || (id % 100) AS name, emb::FLOAT[${DIMS}] AS emb FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') WHERE id < 32768;
+
+statement ok
+CREATE TABLE t_bf AS FROM t;
+
+statement ok
+CREATE INDEX t_idx ON t USING PDXEARCH (emb) WITH (metric = 'l2sq', quantization = 'f32', n_probe = 0, seed = 0);
+
+foreach threads 1 4
+
+statement ok
+SET threads = ${threads};
+
+# ============================================
+# OR across two columns. The scan below the search reads the filter columns and the rowid, not the embedding.
+# ============================================
+
+query II
+EXPLAIN SELECT id FROM t WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*
+
+query II
+EXPLAIN SELECT id FROM t WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<!REGEX>:.*SEQ_SCAN.*emb.*
+
+query I nosort or_two_columns_k10
+SELECT id FROM t WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort or_two_columns_k10
+SELECT id FROM t_bf WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort or_two_columns_k100
+SELECT id FROM t WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 100;
+----
+
+query I nosort or_two_columns_k100
+SELECT id FROM t_bf WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 100;
+----
+
+# All columns are fetched by rowid for the results.
+query IIII nosort or_two_columns_star
+SELECT * FROM t WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 5;
+----
+
+query IIII nosort or_two_columns_star
+SELECT * FROM t_bf WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 5;
+----
+
+# ============================================
+# Expressions over two columns, a CASE, a VARCHAR column.
+# ============================================
+
+query II
+EXPLAIN SELECT id FROM t WHERE id + cat > 30000 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*
+
+query I nosort sum_of_columns
+SELECT id FROM t WHERE id + cat > 30000 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort sum_of_columns
+SELECT id FROM t_bf WHERE id + cat > 30000 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query II
+EXPLAIN SELECT id FROM t WHERE CASE WHEN cat < 5 THEN id < 3000 ELSE id > 30000 END ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*
+
+query I nosort case_over_columns
+SELECT id FROM t WHERE CASE WHEN cat < 5 THEN id < 3000 ELSE id > 30000 END ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort case_over_columns
+SELECT id FROM t_bf WHERE CASE WHEN cat < 5 THEN id < 3000 ELSE id > 30000 END ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort or_with_varchar
+SELECT id FROM t WHERE id % 7 = 0 OR name = 'n5' ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort or_with_varchar
+SELECT id FROM t_bf WHERE id % 7 = 0 OR name = 'n5' ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+# ============================================
+# A conjunction whose remainder DuckDB leaves in a FILTER after pushing `id > 1500` into the scan: both apply.
+# ============================================
+
+query II
+EXPLAIN SELECT id FROM t WHERE id > 1500 AND (id < 1000 OR cat = 3) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*Filters.*
+
+query I nosort filter_and_scan_filter
+SELECT id FROM t WHERE id > 1500 AND (id < 1000 OR cat = 3) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort filter_and_scan_filter
+SELECT id FROM t_bf WHERE id > 1500 AND (id < 1000 OR cat = 3) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+# ============================================
+# Selective filter: 33 rows pass, spread over all row groups, fewer than K. The filter glues the rows of several row
+# groups into one chunk, and every row group's rows must still reach its own search.
+# ============================================
+
+query I nosort glued_row_groups
+SELECT id FROM t WHERE id % 1000 = 0 OR cat = -1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 100;
+----
+
+query I nosort glued_row_groups
+SELECT id FROM t_bf WHERE id % 1000 = 0 OR cat = -1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 100;
+----
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM t WHERE id % 1000 = 0 OR cat = -1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 100);
+----
+33
+
+# No row passes.
+query II
+EXPLAIN SELECT id FROM t WHERE name || cat::VARCHAR = 'none' ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM t WHERE name || cat::VARCHAR = 'none' ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10);
+----
+0
+
+# ============================================
+# Filters that read the embedding or the rowid: the scan keeps the embedding and emits the rowid as an extra column.
+# ============================================
+
+query II
+EXPLAIN SELECT id FROM t WHERE emb[1] > 10 OR id < 100 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*
+
+query I nosort filter_on_embedding
+SELECT id FROM t WHERE emb[1] > 10 OR id < 100 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort filter_on_embedding
+SELECT id FROM t_bf WHERE emb[1] > 10 OR id < 100 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query II
+EXPLAIN SELECT id FROM t WHERE rowid % 3 = 0 OR cat = 1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*
+
+query I nosort filter_on_rowid
+SELECT id FROM t WHERE rowid % 3 = 0 OR cat = 1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort filter_on_rowid
+SELECT id FROM t_bf WHERE rowid % 3 = 0 OR cat = 1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+# ============================================
+# OFFSET: the TopN stays above the filtered search.
+# ============================================
+
+query II
+EXPLAIN SELECT id FROM t WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10 OFFSET 5;
+----
+physical_plan	<REGEX>:.*TOP_N.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*
+
+query I nosort filter_offset
+SELECT id FROM t WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10 OFFSET 5;
+----
+
+query I nosort filter_offset
+SELECT id FROM t_bf WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10 OFFSET 5;
+----
+
+# ============================================
+# A volatile predicate is evaluated once per row below the search, as it would be below the TopN.
+# ============================================
+
+query II
+EXPLAIN SELECT id FROM t WHERE random() < 0.5 AND (id > 5 OR cat = 1) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM t WHERE random() < 0.5 AND (id > 5 OR cat = 1) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10);
+----
+10
+
+# ============================================
+# DuckDB's default late materialization setting.
+# ============================================
+
+statement ok
+RESET late_materialization_max_rows;
+
+query II
+EXPLAIN SELECT id FROM t WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*
+
+query I nosort or_two_columns_k10
+SELECT id FROM t WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+statement ok
+SET late_materialization_max_rows = 0;
+
+endloop

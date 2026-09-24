@@ -1,0 +1,93 @@
+# name: test/sql/filtered_search/index_filtered_scan_join_above_search.test
+# description: A join above the vector search filters the K rows the search returns; it does not decide which K rows
+#              those are. DuckDB's join filter pushdown hands the join's runtime filters to the table scan through the
+#              TopN, and the index scans must not apply them. The same predicate inside the subquery is a predicate of
+#              the search.
+# group: [filtered_search]
+
+require parquet
+
+require pdxearch
+
+statement ok
+SET late_materialization_max_rows = 0;
+
+# Variables
+test-env DIMS 128
+
+test-env QUERY_EMB [48,69,9,6,2,3,7,25,64,130,33,4,0,0,0,9,1,22,66,44,14,6,0,0,1,5,7,4,19,40,1,0,130,17,15,16,11,6,9,70,130,18,2,1,0,0,5,51,12,3,5,32,116,17,11,5,2,1,0,10,80,47,8,0,68,21,47,51,9,23,12,18,108,6,1,0,0,11,130,130,1,0,0,1,43,92,130,48,6,0,0,2,44,130,48,11,0,0,0,4,16,90,10,0,7,1,0,1,5,33,87,84,5,13,3,0,0,35,130,31,20,8,2,0,0,30,26,4]
+
+# t1 is indexed; t1_bf is an unindexed copy whose searches give the brute-force result. QUERY_EMB is row 5's embedding.
+statement ok
+CREATE TABLE t1 AS SELECT id, emb::FLOAT[${DIMS}] AS emb FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') WHERE id < 20000;
+
+statement ok
+CREATE TABLE t1_bf AS FROM t1;
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (metric = 'l2sq', quantization = 'f32', n_probe = 0, seed = 0);
+
+# Of these ids only 4474 is among the 10 nearest rows with id < 15000.
+statement ok
+CREATE TABLE other AS SELECT x FROM (VALUES (4474), (1), (3), (7), (11)) v(x);
+
+# ============================================
+# IN outside the subquery: it keeps the rows of `other` among the 10 nearest.
+# ============================================
+
+query I
+SELECT id FROM (SELECT id FROM t1 WHERE id < 15000 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10) s WHERE s.id IN (SELECT x FROM other) ORDER BY id;
+----
+4474
+
+query I
+SELECT id FROM (SELECT id FROM t1_bf WHERE id < 15000 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10) s WHERE s.id IN (SELECT x FROM other) ORDER BY id;
+----
+4474
+
+# The join's runtime filters (the ids of `other`) never reach the scan below the search.
+query II
+EXPLAIN ANALYZE SELECT id FROM (SELECT id FROM t1 WHERE id < 15000 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10) s WHERE s.id IN (SELECT x FROM other);
+----
+analyzed_plan	<!REGEX>:.*Dynamic Filters.*
+
+query II
+EXPLAIN SELECT id FROM (SELECT id FROM t1 WHERE id < 15000 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10) s WHERE s.id IN (SELECT x FROM other);
+----
+physical_plan	<REGEX>:.*HASH_JOIN.*PDXEARCH_INDEX_FILT_SCAN.*
+
+# Same with a residual filter in the search (a FILTER operator between the search and the scan).
+query I nosort outer_in_residual_filter
+SELECT id FROM (SELECT id FROM t1 WHERE id < 15000 AND (id % 2 = 0 OR emb[1] > 100) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10) s WHERE s.id IN (SELECT x FROM other) ORDER BY id;
+----
+
+query I nosort outer_in_residual_filter
+SELECT id FROM (SELECT id FROM t1_bf WHERE id < 15000 AND (id % 2 = 0 OR emb[1] > 100) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10) s WHERE s.id IN (SELECT x FROM other) ORDER BY id;
+----
+
+query II
+EXPLAIN ANALYZE SELECT id FROM (SELECT id FROM t1 WHERE id < 15000 AND (id % 2 = 0 OR emb[1] > 100) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10) s WHERE s.id IN (SELECT x FROM other);
+----
+analyzed_plan	<!REGEX>:.*Dynamic Filters.*
+
+# ============================================
+# IN inside the subquery: the 10 nearest among the rows that pass it, i.e. all five rows of `other`.
+# ============================================
+
+query I
+SELECT id FROM (SELECT id FROM t1 WHERE id < 15000 AND id IN (SELECT x FROM other) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10) s ORDER BY id;
+----
+1
+3
+7
+11
+4474
+
+query I
+SELECT id FROM (SELECT id FROM t1_bf WHERE id < 15000 AND id IN (SELECT x FROM other) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10) s ORDER BY id;
+----
+1
+3
+7
+11
+4474
