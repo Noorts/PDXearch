@@ -340,7 +340,8 @@ ErrorData PDXearchIndex::Insert(IndexLock &lock, DataChunk &data, Vector &row_id
 	}
 	row_ids.Flatten(count);
 	const auto row_id_data = FlatVector::GetData<row_t>(row_ids);
-
+    // Determine consecutive ranges of row ids.
+    // For example: `1, 2, 3, 5, 6 --> [1, 3] + [5, 6]`
 	PDXearchRowRange range {row_id_data[0], row_id_data[0] + 1};
 	for (idx_t i = 1; i < count; i++) {
 		if (row_id_data[i] == range.end) {

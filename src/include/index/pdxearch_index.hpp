@@ -47,15 +47,19 @@ private:
 	void DeleteRow(row_t row_id);
 
 	// Returns the committed rows of [start, end) whose embedding is not NULL,
-	// We transforme them (random rotation) and returns how many were written to `embeddings`.
+	// We transform them (random rotation) and return how many were written to `embeddings`.
 	// `rows_returned` counts every committed row the table returned, NULL embeddings included.
 	idx_t FetchRows(DataTable &table, row_t start, row_t end, row_t *row_ids, float *embeddings, idx_t &rows_returned);
+
 	// Find row groups whose mirrors are stale:
 	// - DuckDB merged two or more row groups into one
 	// - DuckDB dropped a rowgroup (e.g., VACUUM, CHECKPOINT merging)
 	vector<PDXearchRowGroupBounds> FindStaleRowGroups(DataTable &table) const;
+
 	void RemoveRowGroupsOverlapping(row_t start, row_t end);
+
 	void RemoveUnindexedRow(row_t row_id);
+	
 	// A table is in sync if:
 	// - No unindexed rows
 	// - Every mirrored row group matches its DuckDB row group.
