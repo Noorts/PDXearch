@@ -59,7 +59,7 @@ private:
 	void RemoveRowGroupsOverlapping(row_t start, row_t end);
 
 	void RemoveUnindexedRow(row_t row_id);
-	
+
 	// A table is in sync if:
 	// - No unindexed rows
 	// - Every mirrored row group matches its DuckDB row group.
