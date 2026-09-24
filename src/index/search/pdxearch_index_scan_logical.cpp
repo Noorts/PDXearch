@@ -16,7 +16,7 @@ PhysicalOperator &LogicalPDXearchIndexScan::CreatePlan(ClientContext &context, P
 }
 
 vector<ColumnBinding> LogicalPDXearchIndexScan::GetColumnBindings() {
-	return GenerateColumnBindings(table_index, column_ids.size());
+	return column_bindings;
 }
 
 void LogicalPDXearchIndexScan::ResolveTypes() {

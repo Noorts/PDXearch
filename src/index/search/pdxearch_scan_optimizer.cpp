@@ -166,6 +166,16 @@ namespace duckdb {
  * filter pipeline does not read embeddings. The filtered search fetches the
  * table scan's original columns by rowid for its K results.
  *
+ * Subqueries and views (DuckDB binds a view as a subquery) add projections that
+ * forward the table's columns. They may sit anywhere in the chain between the
+ * projection and the table scan, mixed with the FILTER operators, and the
+ * rowid is forwarded through them as well. The index scans emit the columns
+ * the projection reads under the bindings it reads them with, so a chain
+ * without FILTER operators is replaced entirely (scenarios 1 and 2). A query
+ * that reads a value the chain computes (e.g. `id * 2 AS x` of a subquery) is
+ * not optimized. Projections that only forward the distance (`ORDER BY d` over
+ * a subquery that computes d) stay above the search.
+ *
  *              IN                                  OUT
  * ┌───────────────────────────┐        ┌───────────────────────────┐
  * │         PROJECTION        │        │         PROJECTION        │
@@ -242,8 +252,62 @@ public:
 		optimize_function = Optimize;
 	}
 
-	static bool CanReplaceEmbeddingByRowId(const LogicalGet &get, const vector<reference<LogicalFilter>> &filters,
-	                                       const idx_t embedding_column_position) {
+	// Follows a binding read above chain.front() down the chain (ordered from the top down to the table scan) to the
+	// table scan's binding it comes from. A filter forwards its child's bindings, and a projection forwards a binding
+	// when its expression is a plain column reference. False when a projection computes the value instead.
+	static bool TryTraceToTableScan(const vector<reference<LogicalOperator>> &chain, ColumnBinding &binding) {
+		for (auto &op : chain) {
+			if (op.get().type != LogicalOperatorType::LOGICAL_PROJECTION) {
+				continue;
+			}
+			auto &projection = op.get().Cast<LogicalProjection>();
+			if (binding.table_index != projection.table_index ||
+			    binding.column_index >= projection.expressions.size()) {
+				return false;
+			}
+			auto &expression = *projection.expressions[binding.column_index];
+			if (expression.type != ExpressionType::BOUND_COLUMN_REF) {
+				return false;
+			}
+			binding = expression.Cast<BoundColumnRefExpression>().binding;
+		}
+		return true;
+	}
+
+	// Collects the bindings the projection reads from its child, and the table scan's column each one traces to: an
+	// index scan replacing the projection's child emits those columns, fetched by rowid, under those bindings. False
+	// when the projection reads a value that the chain computes.
+	static bool TryCollectOutputColumns(LogicalProjection &projection, const vector<reference<LogicalOperator>> &chain,
+	                                    const LogicalGet &get, vector<ColumnBinding> &bindings,
+	                                    vector<ColumnIndex> &column_ids) {
+		bool all_traced = true;
+		for (auto &expression : projection.expressions) {
+			ExpressionIterator::EnumerateExpression(expression, [&](Expression &child) {
+				if (child.type != ExpressionType::BOUND_COLUMN_REF) {
+					return;
+				}
+				const auto binding = child.Cast<BoundColumnRefExpression>().binding;
+				if (std::find(bindings.begin(), bindings.end(), binding) != bindings.end()) {
+					return;
+				}
+				auto traced_binding = binding;
+				if (!TryTraceToTableScan(chain, traced_binding) || traced_binding.table_index != get.table_index) {
+					all_traced = false;
+					return;
+				}
+				bindings.push_back(binding);
+				column_ids.push_back(get.GetColumnIds()[traced_binding.column_index]);
+			});
+		}
+		return all_traced;
+	}
+
+	// Whether the rowid can take the embedding's slot in the table scan: the scan has no rowid yet, no pushed-down
+	// filter reads the embedding, and the chain only forwards it (no predicate and no computed value reads it).
+	// `forwards` receives the projections' column references that forward it.
+	static bool CanReplaceEmbeddingByRowId(const LogicalGet &get, const vector<reference<LogicalOperator>> &chain,
+	                                       const idx_t embedding_column_position,
+	                                       vector<reference<BoundColumnRefExpression>> &forwards) {
 		const auto &column_ids = get.GetColumnIds();
 		for (auto &column_id : column_ids) {
 			if (column_id.IsRowIdColumn()) {
@@ -254,36 +318,65 @@ public:
 		    get.table_filters.filters.end()) {
 			return false;
 		}
-		const ColumnBinding embedding_binding(get.table_index, embedding_column_position);
-		bool is_read_by_a_filter = false;
-		for (auto &filter : filters) {
-			for (auto &expression : filter.get().expressions) {
-				ExpressionIterator::EnumerateExpression(expression, [&](Expression &child) {
-					if (child.type == ExpressionType::BOUND_COLUMN_REF &&
-					    child.Cast<BoundColumnRefExpression>().binding == embedding_binding) {
-						is_read_by_a_filter = true;
+		// The bindings that carry the embedding, from the table scan up the chain.
+		vector<ColumnBinding> embedding_bindings {ColumnBinding(get.table_index, embedding_column_position)};
+		const auto reads_embedding = [&](unique_ptr<Expression> &expression) {
+			bool reads = false;
+			ExpressionIterator::EnumerateExpression(expression, [&](Expression &child) {
+				if (child.type == ExpressionType::BOUND_COLUMN_REF &&
+				    std::find(embedding_bindings.begin(), embedding_bindings.end(),
+				              child.Cast<BoundColumnRefExpression>().binding) != embedding_bindings.end()) {
+					reads = true;
+				}
+			});
+			return reads;
+		};
+		for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+			auto &op = it->get();
+			if (op.type == LogicalOperatorType::LOGICAL_FILTER) {
+				for (auto &expression : op.expressions) {
+					if (reads_embedding(expression)) {
+						return false;
 					}
-				});
+				}
+				continue;
 			}
+			auto &projection = op.Cast<LogicalProjection>();
+			vector<ColumnBinding> forwarded_bindings;
+			for (idx_t i = 0; i < projection.expressions.size(); i++) {
+				auto &expression = projection.expressions[i];
+				if (expression->type == ExpressionType::BOUND_COLUMN_REF && reads_embedding(expression)) {
+					forwards.push_back(expression->Cast<BoundColumnRefExpression>());
+					forwarded_bindings.emplace_back(projection.table_index, i);
+				} else if (reads_embedding(expression)) {
+					return false;
+				}
+			}
+			embedding_bindings = std::move(forwarded_bindings);
 		}
-		return !is_read_by_a_filter;
+		return true;
 	}
 
-	// Makes the rowid of the rows that pass `filters` (ordered from the top down to `get`) come out of the top filter,
-	// and returns its binding there.
-	static ColumnBinding PassRowIdThroughFilters(LogicalGet &get, const vector<reference<LogicalFilter>> &filters,
-	                                             const optional_idx embedding_column_position) {
+	// Makes the rowid of the rows that pass the chain (ordered from the top down to `get`) come out of the chain's top
+	// operator, and returns its binding there. `embedding_binding` is the embedding's binding at the top.
+	static ColumnBinding PassRowIdThroughChain(LogicalGet &get, const vector<reference<LogicalOperator>> &chain,
+	                                           const ColumnBinding embedding_binding,
+	                                           const optional_idx embedding_column_position) {
 		auto &column_ids = get.GetMutableColumnIds();
 		// Above the filtered search the embedding is fetched again by rowid, so below it the scan only needs it for
 		// predicates. If no predicate reads it and the scan has no rowid yet, the rowid takes the embedding's slot:
-		// every filter forwards it under the embedding's binding, and the filter pipeline no longer reads embeddings.
+		// the chain forwards it along the embedding's path, and the filter pipeline no longer reads embeddings.
+		vector<reference<BoundColumnRefExpression>> forwards;
 		if (embedding_column_position.IsValid() &&
-		    CanReplaceEmbeddingByRowId(get, filters, embedding_column_position.GetIndex())) {
+		    CanReplaceEmbeddingByRowId(get, chain, embedding_column_position.GetIndex(), forwards)) {
 			column_ids[embedding_column_position.GetIndex()] = ColumnIndex(COLUMN_IDENTIFIER_ROW_ID);
-			return ColumnBinding(get.table_index, embedding_column_position.GetIndex());
+			for (auto &forward : forwards) {
+				forward.get().return_type = LogicalType::ROW_TYPE;
+			}
+			return embedding_binding;
 		}
-		// Otherwise the scan emits the rowid as well, and every filter that projects its output forwards it. Appending
-		// keeps the positions of the other columns, which bindings and projection maps refer to.
+		// Otherwise the scan emits the rowid as well, and every operator of the chain forwards it. Appending keeps the
+		// positions of the other columns, which bindings and projection maps refer to.
 		idx_t rowid_position = column_ids.size();
 		for (idx_t i = 0; i < column_ids.size(); i++) {
 			if (column_ids[i].IsRowIdColumn()) {
@@ -298,9 +391,16 @@ public:
 		                                             rowid_position) == get.projection_ids.end()) {
 			get.projection_ids.push_back(rowid_position);
 		}
-		const ColumnBinding rowid_binding(get.table_index, rowid_position);
-		for (auto it = filters.rbegin(); it != filters.rend(); ++it) {
-			auto &projection_map = it->get().projection_map;
+		ColumnBinding rowid_binding(get.table_index, rowid_position);
+		for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+			if (it->get().type == LogicalOperatorType::LOGICAL_PROJECTION) {
+				auto &projection = it->get().Cast<LogicalProjection>();
+				projection.expressions.push_back(
+				    make_uniq<BoundColumnRefExpression>(LogicalType::ROW_TYPE, rowid_binding));
+				rowid_binding = ColumnBinding(projection.table_index, projection.expressions.size() - 1);
+				continue;
+			}
+			auto &projection_map = it->get().Cast<LogicalFilter>().projection_map;
 			if (projection_map.empty()) {
 				continue;
 			}
@@ -356,21 +456,47 @@ public:
 			return false;
 		}
 
-		auto &projection = top_n.children.front()->Cast<LogicalProjection>();
+		// Follow the TopN key through projections that only forward it (e.g. `ORDER BY d` over a subquery that computes
+		// d) to the projection that computes the distance. The forwarding projections stay above the search.
+		reference<LogicalProjection> distance_projection = top_n.children.front()->Cast<LogicalProjection>();
+		ColumnBinding distance_binding = bound_column_ref.binding;
+		while (distance_binding.column_index < distance_projection.get().expressions.size() &&
+		       distance_projection.get().expressions[distance_binding.column_index]->type ==
+		           ExpressionType::BOUND_COLUMN_REF) {
+			auto &forwarding_projection = distance_projection.get();
+			distance_binding = forwarding_projection.expressions[distance_binding.column_index]
+			                       ->Cast<BoundColumnRefExpression>()
+			                       .binding;
+			if (forwarding_projection.children.size() != 1 ||
+			    forwarding_projection.children.front()->type != LogicalOperatorType::LOGICAL_PROJECTION) {
+				return false;
+			}
+			distance_projection = forwarding_projection.children.front()->Cast<LogicalProjection>();
+			if (distance_binding.table_index != distance_projection.get().table_index) {
+				return false;
+			}
+		}
+		auto &projection = distance_projection.get();
+		if (distance_binding.column_index >= projection.expressions.size()) {
+			return false;
+		}
 
 		// This the expression that is referenced by the order by expression
-		const auto projection_index = bound_column_ref.binding.column_index;
-		const auto &projection_expr = projection.expressions[projection_index];
+		const auto &projection_expr = projection.expressions[distance_binding.column_index];
 
-		// The projection must sit on top of a get, possibly with FILTER operators in between: they hold the predicates
-		// DuckDB could not push into the table scan.
+		// The projection must sit on top of a get, possibly with a chain of FILTER operators (the predicates DuckDB
+		// could not push into the table scan) and projections (subqueries and views) in between.
 		if (projection.children.size() != 1) {
 			return false;
 		}
-		vector<reference<LogicalFilter>> filters; // From the projection down to the table scan.
+		vector<reference<LogicalOperator>> chain; // From the projection's child down to the table scan (excluded).
+		bool chain_has_filter = false;
 		auto *get_ptr_ptr = &projection.children.front();
-		while ((*get_ptr_ptr)->type == LogicalOperatorType::LOGICAL_FILTER && (*get_ptr_ptr)->children.size() == 1) {
-			filters.push_back((*get_ptr_ptr)->Cast<LogicalFilter>());
+		while ((*get_ptr_ptr)->children.size() == 1 &&
+		       ((*get_ptr_ptr)->type == LogicalOperatorType::LOGICAL_FILTER ||
+		        (*get_ptr_ptr)->type == LogicalOperatorType::LOGICAL_PROJECTION)) {
+			chain_has_filter |= (*get_ptr_ptr)->type == LogicalOperatorType::LOGICAL_FILTER;
+			chain.push_back(**get_ptr_ptr);
 			get_ptr_ptr = &(*get_ptr_ptr)->children.front();
 		}
 		if ((*get_ptr_ptr)->type != LogicalOperatorType::LOGICAL_GET) {
@@ -405,7 +531,9 @@ public:
 		// Find the index
 		unique_ptr<PDXearchIndexScanBindData> bind_data = nullptr;
 		vector<reference<Expression>> bindings;
-		// The embedding column's position in the table scan, when the index expression is a plain column.
+		// When the index expression is a plain column: the embedding's binding as the projection reads it, and its
+		// position in the table scan.
+		ColumnBinding embedding_binding;
 		optional_idx embedding_column_position;
 
 		table_info.BindIndexes(context, PDXearchIndex::TYPE_NAME);
@@ -432,17 +560,31 @@ public:
 			auto &const_expr_ref = bindings[1];
 			auto &index_expr_ref = bindings[2];
 
-			if (const_expr_ref.get().type != ExpressionType::VALUE_CONSTANT || !index_expr->Equals(index_expr_ref)) {
+			// The index expression is bound to the table scan, the argument reads it through the chain: compare the
+			// argument traced down to the table scan.
+			const auto is_index_expression = [&](const Expression &argument) {
+				if (argument.type != ExpressionType::BOUND_COLUMN_REF) {
+					return index_expr->Equals(argument);
+				}
+				auto binding = argument.Cast<BoundColumnRefExpression>().binding;
+				return TryTraceToTableScan(chain, binding) &&
+				       index_expr->Equals(BoundColumnRefExpression(argument.return_type, binding));
+			};
+
+			if (const_expr_ref.get().type != ExpressionType::VALUE_CONSTANT || !is_index_expression(index_expr_ref)) {
 				// Swap the bindings and try again
 				std::swap(const_expr_ref, index_expr_ref);
 				if (const_expr_ref.get().type != ExpressionType::VALUE_CONSTANT ||
-				    !index_expr->Equals(index_expr_ref)) {
+				    !is_index_expression(index_expr_ref)) {
 					// Nope, not a match, we can't optimize.
 					continue;
 				}
 			}
 			if (index_expr_ref.get().type == ExpressionType::BOUND_COLUMN_REF) {
-				embedding_column_position = index_expr_ref.get().Cast<BoundColumnRefExpression>().binding.column_index;
+				embedding_binding = index_expr_ref.get().Cast<BoundColumnRefExpression>().binding;
+				auto traced_binding = embedding_binding;
+				TryTraceToTableScan(chain, traced_binding);
+				embedding_column_position = traced_binding.column_index;
 			}
 
 			const auto num_dimensions = cast_index.GetNumDimensions();
@@ -476,6 +618,13 @@ public:
 			return false;
 		}
 
+		// The columns the index scan emits: those the projection reads. Checked before the plan is changed.
+		vector<ColumnBinding> output_bindings;
+		vector<ColumnIndex> output_column_ids;
+		if (!TryCollectOutputColumns(projection, chain, get, output_bindings, output_column_ids)) {
+			return false;
+		}
+
 		// A join above this search may drop some of the K rows the search returns, but must not decide which K rows
 		// those are. DuckDB's join filter pushdown also hands the join's runtime filters to this table scan, through
 		// the TopN the search replaces, so the scan is detached from them. The join keeps its own reference and fills
@@ -491,36 +640,31 @@ public:
 
 		bool has_pushed_down_filters = !get.table_filters.filters.empty();
 
-		if (filters.empty() && !has_pushed_down_filters) {
+		if (!chain_has_filter && !has_pushed_down_filters) {
 			// Scenario 1: Non-filtered search.
 
-			// 1. Store the table scan's column ids. The replacement PDXearchIndexFilteredScan will need to emit the
-			//    same columns as the table scan did.
-			const auto table_scan_column_ids = get.GetColumnIds();
-
-			// 2. Replace the table scan with the index scan.
+			// 1. Replace the table scan, and the projections above it that forward its columns, with the index scan.
 			auto pdxearch_index_scan = make_uniq<LogicalPDXearchIndexScan>(
 			    duck_table, bind_data->index, bind_data->limit, std::move(bind_data->query_embedding),
-			    table_scan_column_ids, get.table_index);
+			    std::move(output_column_ids), std::move(output_bindings));
 
 			projection.children.clear();
 			projection.children.push_back(std::move(pdxearch_index_scan));
 			projection.estimated_cardinality = top_n.estimated_cardinality;
 			projection.ResolveOperatorTypes();
 
-			// 3. Remove the TopN operator, unless it has an OFFSET to apply.
+			// 2. Remove the TopN operator, unless it has an OFFSET to apply.
 			if (top_n.offset == 0) {
 				plan = std::move(top_n.children[0]);
 			}
 			return true;
-		} else if (filters.empty()) {
+		} else if (!chain_has_filter) {
 			// Scenario 2: Simple filtered search.
 
-			// We have a top-n operator on top of a table scan that has pushed down filters.
-			// We do the following:
-			// 1. Store the table scan's column ids. The replacement PDXearchIndexFilteredScan will need to emit the
-			//    same columns as the table scan did.
-			const auto table_scan_column_ids = get.GetColumnIds();
+			// We have a top-n operator on top of a table scan that has pushed down filters, possibly below projections
+			// that forward its columns. The PDXearchIndexFilteredScan replaces those projections: it emits the columns
+			// the projection above reads (output_bindings), fetched by rowid. We do the following:
+			// 1. The PDXearchIndexFilteredScan goes directly above the table scan, which the next steps change.
 
 			// 2. Set the table scan's column_ids to include only those needed for the filters and the projected rowid
 			//    column.
@@ -551,7 +695,7 @@ public:
 			// 4. Insert a PDXearchIndexFilteredScan operator above the table scan.
 			auto pdxearch_index_filtered_scan = make_uniq<LogicalPDXearchIndexFilteredScan>(
 			    duck_table, bind_data->index, bind_data->limit, std::move(bind_data->query_embedding),
-			    table_scan_column_ids, get.table_index);
+			    std::move(output_column_ids), std::move(output_bindings));
 			// Bind and push back only the row_id column that the table scan should emit
 			// The table scan is configured to only output the rowid column at index rowid_pos
 			auto row_id_column =
@@ -573,16 +717,16 @@ public:
 			return true;
 		} else {
 			// Scenario 3: Filtered search where FILTER operators between the projection and the table scan hold (part
-			// of) the predicate. The table scan may have pushed-down filters as well.
+			// of) the predicate, possibly mixed with projections that forward the table scan's columns. The table scan
+			// may have pushed-down filters as well.
 
-			// 1. Store the table scan's column ids. The PDXearchIndexFilteredScan emits the same columns under the same
-			//    bindings, fetched by rowid, so the operators above it keep working unchanged.
-			const auto table_scan_column_ids = get.GetColumnIds();
+			// 1. The PDXearchIndexFilteredScan emits the columns the projection reads (output_bindings), fetched by
+			//    rowid, so the operators above it keep working unchanged.
 
-			// 2. Make the rowid of every row that passes the predicate come out of the top filter.
-			const auto rowid_binding = PassRowIdThroughFilters(get, filters, embedding_column_position);
+			// 2. Make the rowid of every row that passes the predicate come out of the top of the chain.
+			const auto rowid_binding = PassRowIdThroughChain(get, chain, embedding_binding, embedding_column_position);
 
-			// 3. Keep only that rowid on top of the filters: the filtered search's sink takes a single rowid column.
+			// 3. Keep only that rowid on top of the chain: the filtered search's sink takes a single rowid column.
 			vector<unique_ptr<Expression>> rowid_expressions;
 			rowid_expressions.push_back(make_uniq<BoundColumnRefExpression>(LogicalType::ROW_TYPE, rowid_binding));
 			auto rowid_projection =
@@ -592,7 +736,7 @@ public:
 			// 4. Insert a PDXearchIndexFilteredScan operator above the rowid projection.
 			auto pdxearch_index_filtered_scan = make_uniq<LogicalPDXearchIndexFilteredScan>(
 			    duck_table, bind_data->index, bind_data->limit, std::move(bind_data->query_embedding),
-			    table_scan_column_ids, get.table_index);
+			    std::move(output_column_ids), std::move(output_bindings));
 			pdxearch_index_filtered_scan->expressions.push_back(make_uniq<BoundColumnRefExpression>(
 			    LogicalType::ROW_TYPE, ColumnBinding(rowid_projection->table_index, 0)));
 			pdxearch_index_filtered_scan->children.push_back(std::move(rowid_projection));
