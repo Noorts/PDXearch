@@ -152,19 +152,15 @@ As mentioned above, we aim to address all of these limitations soon.
   rebuild the index when you reload the database (to avoid loading a malformed
   index from storage).
 
-- **No maintenance**: We currently only support creating an index on static
-  collections. This means the index does not yet support updating the index when
-  a `INSERT INTO` or `DELETE FROM` statement is invoked on the table.
-
 - **Limited concurrency**: Any number of KNN queries can search an index
-  concurrently, but the (not yet supported) maintenance operations exclude all
-  searches while they run.
-
-- **Requires full row groups**: The extension currently requires all but the
-  last row group to be completely filled with rows. For example, three row
-  groups where they have 122880, 122880, 4000 rows respectively is valid.
-  Inserting rows in batches of 122880 can help to create such a layout. This is
-  a limitation we aim to address very soon.
+  concurrently, but the maintenance operations exclude all searches while they
+  run. `DELETE`s are applied to the index when the transaction commits.
+  `INSERT`ed rows are indexed by the first search that runs after the commit
+  (or eagerly by `CALL pdxearch_sync_index('index_name');`), one DuckDB row
+  group at a time, so the first query after a bulk load pays the indexing cost
+  of the new rows (a few seconds per million rows). The index mirrors DuckDB's
+  row groups; when a checkpoint merges or drops row groups, the same first
+  search rebuilds the affected part of the index from the table.
 
 - **Late materialization and filter types**: As noted above, we don't optimally
   handle DuckDB's late materialization optimizer rule yet. Furthermore, on a

@@ -4,12 +4,19 @@
 #include "duckdb/execution/index/index_pointer.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/optimizer/matcher/expression_matcher.hpp"
+#include "duckdb/storage/data_table.hpp"
 #include "duckdb/storage/storage_lock.hpp"
+#include <atomic>
 
 #include "pdx/common.hpp"
 #include "index/pdxearch_wrapper.hpp"
 
 namespace duckdb {
+
+struct PDXearchRowRange {
+	row_t start; // [start, end)
+	row_t end;
+};
 
 struct PDXearchIndexStats {
 	string metric;
@@ -30,6 +37,33 @@ public:
 
 private:
 	unique_ptr<PDXearchWrapper> pdxearch_wrapper;
+	unique_ptr<EmbeddingPreprocessor> embedding_preprocessor;
+
+	// Row ids committed to the table whose embeddings are not in the index yet
+	std::vector<PDXearchRowRange> unindexed_row_ranges;
+	std::atomic<bool> has_unindexed_rows {false};
+
+	void AppendRow(idx_t row_group_idx, row_t row_id, const float *transformed_embedding);
+	void DeleteRow(row_t row_id);
+
+	// Returns the committed rows of [start, end) whose embedding is not NULL,
+	// We transform them (random rotation) and return how many were written to `embeddings`.
+	// `rows_returned` counts every committed row the table returned, NULL embeddings included.
+	idx_t FetchRows(DataTable &table, row_t start, row_t end, row_t *row_ids, float *embeddings, idx_t &rows_returned);
+
+	// Find row groups whose mirrors are stale:
+	// - DuckDB merged two or more row groups into one
+	// - DuckDB dropped a rowgroup (e.g., VACUUM, CHECKPOINT merging)
+	vector<PDXearchRowGroupBounds> FindStaleRowGroups(DataTable &table) const;
+
+	void RemoveRowGroupsOverlapping(row_t start, row_t end);
+
+	void RemoveUnindexedRow(row_t row_id);
+
+	// A table is in sync if:
+	// - No unindexed rows
+	// - Every mirrored row group matches its DuckDB row group.
+	bool IsInSyncWithTable(DataTable &table) const;
 
 	unique_ptr<ExpressionMatcher> function_matcher;
 	IndexPointer root_block_ptr;
@@ -49,7 +83,7 @@ public:
 	PDXearchIndex(const string &name, IndexConstraintType index_constraint_type, const vector<column_t> &column_ids,
 	              TableIOManager &table_io_manager, const vector<unique_ptr<Expression>> &unbound_expressions,
 	              AttachedDatabase &db, const case_insensitive_map_t<Value> &options,
-	              const IndexStorageInfo &info = IndexStorageInfo(), idx_t estimated_cardinality = 0);
+	              const IndexStorageInfo &info = IndexStorageInfo());
 
 	static PhysicalOperator &CreatePlan(PlanIndexInput &input);
 
@@ -57,14 +91,36 @@ public:
 	 * Index creation and search methods specific to the parallel implementation
 	 ******************************************************************/
 
-	unique_ptr<StorageLockKey> TakeSearchLock();
+	// Syncs the index with the table if it is out of date, then returns the shared lock a search holds while it runs.
+	unique_ptr<StorageLockKey> SyncAndLockForSearch(DataTable &table);
 
-	void SetUpIndexForRowGroup(const row_t *row_ids, const float *embeddings, idx_t num_embeddings, idx_t row_group_id);
+	bool HasUnindexedRows() const {
+		return has_unindexed_rows;
+	}
 
-	unique_ptr<PDX::IIterativeSearch> BeginSearchForRowGroup(idx_t row_group_id,
+	// Detect and rebuild rowgroups whose mirrors no longer match the table rowgroups.
+	// Append unindexed rows to the index, and retire them from the unindexed list
+	// Rows whose commit is still in flight stay unindexed.
+	void SyncWithTable(DataTable &table);
+
+	idx_t GetRowGroupSize() const;
+
+	// The DuckDB row group that holds row_id. False if the row is not in the table (yet).
+	bool TryGetPhysicalRowGroup(DataTable &table, row_t row_id, PDXearchRowGroupBounds &result) const;
+
+	vector<PDXearchRowGroupBounds> GetPhysicalRowGroups(DataTable &table) const;
+
+	// Position of the index's row group that holds row_id (the row_group_idx of the methods below).
+	optional_idx LookupRowGroup(row_t row_id) const;
+
+	void SetUpIndexForRowGroup(const row_t *row_ids, const float *embeddings, idx_t num_embeddings, row_t row_start,
+	                           idx_t count);
+
+	// !`passing_row_ids` are size_t because they go straight into PDX's IPDXIndex::BeginIterativeSearch.
+	unique_ptr<PDX::IIterativeSearch> BeginSearchForRowGroup(idx_t row_group_idx,
 	                                                         const float *preprocessed_query_embedding, idx_t limit,
 	                                                         PDX::TopKHeap &top_k_heap,
-	                                                         const std::vector<row_t> *passing_row_ids);
+	                                                         const std::vector<size_t> *passing_row_ids);
 
 	/******************************************************************
 	 * Index maintenance

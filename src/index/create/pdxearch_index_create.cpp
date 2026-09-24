@@ -28,8 +28,7 @@ public:
 	explicit CreatePDXearchIndexGlobalSinkState(const PhysicalCreatePDXearchIndex &op)
 	    : global_index(make_uniq<PDXearchIndex>(op.info->index_name, op.info->constraint_type, op.storage_ids,
 	                                            TableIOManager::Get(op.table.GetStorage()), op.unbound_expressions,
-	                                            op.table.GetStorage().db, op.info->options, IndexStorageInfo(),
-	                                            op.estimated_cardinality)),
+	                                            op.table.GetStorage().db, op.info->options, IndexStorageInfo())),
 	      num_dimensions(ArrayType::GetSize(op.unbound_expressions[0]->return_type)),
 	      embedding_preprocessor(make_uniq<EmbeddingPreprocessor>(
 	          num_dimensions, global_index->Cast<PDXearchIndex>().GetRotationMatrix())),
@@ -50,17 +49,29 @@ class CreatePDXearchIndexLocalSinkState : public LocalSinkState {
 public:
 	explicit CreatePDXearchIndexLocalSinkState(const PhysicalCreatePDXearchIndex &op, ClientContext &context,
 	                                           CreatePDXearchIndexGlobalSinkState &g_sink) {
-		row_group_embeddings_buffer.resize(DEFAULT_ROW_GROUP_SIZE * g_sink.num_dimensions);
+		const auto row_group_size = g_sink.global_index->Cast<PDXearchIndex>().GetRowGroupSize();
+		row_group_embeddings_buffer.resize(row_group_size * g_sink.num_dimensions);
+		row_group_row_ids.resize(row_group_size);
 	}
 
-	// Id of the currently buffered row group.
-	idx_t row_group_id {0};
+	// The DuckDB row group whose rows are currently buffered.
+	PDXearchRowGroupBounds row_group {0, 0};
+	bool has_row_group {false};
 	// Number of embeddings currently buffered in the row group.
 	idx_t row_group_embeddings_count {0};
 	std::vector<float> row_group_embeddings_buffer;
 	// Row IDs of the embeddings currently buffered in the row group.
-	std::array<row_t, DEFAULT_ROW_GROUP_SIZE> row_group_row_ids;
+	std::vector<row_t> row_group_row_ids;
 };
+
+static void FlushRowGroup(PDXearchIndex &pdxearch_index, CreatePDXearchIndexLocalSinkState &l_sink) {
+	if (l_sink.row_group_embeddings_count > 0) {
+		pdxearch_index.SetUpIndexForRowGroup(l_sink.row_group_row_ids.data(), l_sink.row_group_embeddings_buffer.data(),
+		                                     l_sink.row_group_embeddings_count, l_sink.row_group.row_start,
+		                                     l_sink.row_group.count);
+		l_sink.row_group_embeddings_count = 0;
+	}
+}
 
 unique_ptr<LocalSinkState> PhysicalCreatePDXearchIndex::GetLocalSinkState(ExecutionContext &context) const {
 	return make_uniq<CreatePDXearchIndexLocalSinkState>(*this, context.client,
@@ -86,30 +97,34 @@ SinkResultType PhysicalCreatePDXearchIndex::Sink(ExecutionContext &context, Data
 	D_ASSERT(ArrayType::GetSize(embedding_column.GetType()) == g_sink.num_dimensions);
 	D_ASSERT(row_id_column.GetType() == LogicalType::ROW_TYPE);
 
-	const idx_t row_group_id = GetRowGroupId(row_id_column.GetValue(0).GetValue<row_t>());
-	D_ASSERT(l_sink.row_group_id <= row_group_id);
+	// Chunks arrive with a selection vector when the scan skipped deleted rows or the filter dropped NULL embeddings.
+	const idx_t num_embeddings = input_chunk.size();
+	embedding_column.Flatten(num_embeddings);
+	row_id_column.Flatten(num_embeddings);
+	const auto row_id_data = FlatVector::GetData<row_t>(row_id_column);
+
+	// A chunk never spans two DuckDB row groups, so the first row id tells which one this chunk belongs to.
+	PDXearchRowGroupBounds row_group;
+	if (!pdxearch_index.TryGetPhysicalRowGroup(table.GetStorage(), row_id_data[0], row_group)) {
+		throw InternalException("PDXearch: row id %lld is not in any row group of the table", row_id_data[0]);
+	}
+	D_ASSERT(!l_sink.has_row_group || l_sink.row_group.row_start <= row_group.row_start);
 
 	// If we detect a new row group, then finalize the previous row group and prepare to process the new one.
-	if (row_group_id > l_sink.row_group_id && l_sink.row_group_embeddings_count > 0) {
-		// Finalize the previous row group.
-		pdxearch_index.SetUpIndexForRowGroup(l_sink.row_group_row_ids.data(), l_sink.row_group_embeddings_buffer.data(),
-		                                     l_sink.row_group_embeddings_count, l_sink.row_group_id);
-		// Reset state to process new row group.
-		l_sink.row_group_embeddings_count = 0;
+	if (l_sink.has_row_group && row_group.row_start != l_sink.row_group.row_start) {
+		FlushRowGroup(pdxearch_index, l_sink);
 	}
-	l_sink.row_group_id = row_group_id;
+	l_sink.row_group = row_group;
+	l_sink.has_row_group = true;
 
 	// Preprocess and accumulate the embeddings into the temporary row group buffer.
-	const idx_t num_embeddings = input_chunk.size();
-	D_ASSERT(l_sink.row_group_embeddings_count + num_embeddings <= DEFAULT_ROW_GROUP_SIZE);
+	D_ASSERT(l_sink.row_group_embeddings_count + num_embeddings <= row_group.count);
 
 	g_sink.embedding_preprocessor->PreprocessEmbeddings(
 	    FlatVector::GetData<float>(ArrayVector::GetEntry(embedding_column)),
 	    l_sink.row_group_embeddings_buffer.data() + (l_sink.row_group_embeddings_count * g_sink.num_dimensions),
 	    num_embeddings, g_sink.is_normalized);
 
-	row_id_column.Flatten(num_embeddings);
-	const auto row_id_data = FlatVector::GetData<row_t>(row_id_column);
 	memcpy(l_sink.row_group_row_ids.data() + l_sink.row_group_embeddings_count, row_id_data,
 	       num_embeddings * sizeof(row_t));
 
@@ -125,10 +140,7 @@ SinkCombineResultType PhysicalCreatePDXearchIndex::Combine(ExecutionContext &con
 	auto &pdxearch_index = g_sink.global_index->Cast<PDXearchIndex>();
 
 	// Finalize this thread's last row group.
-	if (l_sink.row_group_embeddings_count > 0) {
-		pdxearch_index.SetUpIndexForRowGroup(l_sink.row_group_row_ids.data(), l_sink.row_group_embeddings_buffer.data(),
-		                                     l_sink.row_group_embeddings_count, l_sink.row_group_id);
-	}
+	FlushRowGroup(pdxearch_index, l_sink);
 
 	return SinkCombineResultType::FINISHED;
 }

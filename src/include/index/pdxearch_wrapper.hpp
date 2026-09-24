@@ -1,19 +1,20 @@
 #pragma once
 
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/helper.hpp"
+#include "duckdb/common/optional_idx.hpp"
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <vector>
 
-#include "pdx/clustering.hpp"
 #include "pdx/common.hpp"
-#include "pdx/db_mock/predicate_evaluator.hpp"
-#include "pdx/indexes/ivf_core.hpp"
-#include "pdx/indexes/ivf_utils.hpp"
+#include "pdx/indexes/flat.hpp"
+#include "pdx/indexes/ivf_vanilla.hpp"
+#include "pdx/ivf_searcher.hpp"
 #include "pdx/pruners/adsampling.hpp"
-#include "pdx/searcher.hpp"
-#include "duckdb/common/helper.hpp"
 #include "index/pdxearch_index_utils.hpp"
 
 namespace duckdb {
@@ -58,13 +59,6 @@ public:
 	}
 	virtual ~PDXearchWrapper() = default;
 
-	void Insert(row_t row_id, const float *embedding) {
-		throw NotImplementedException("PDXearchWrapper::Insert() not implemented");
-	}
-	void Delete(row_t row_id) {
-		throw NotImplementedException("PDXearchWrapper::Delete() not implemented");
-	}
-
 	uint32_t GetNumDimensions() const {
 		return num_dimensions;
 	}
@@ -91,28 +85,21 @@ public:
 	virtual uint64_t GetInMemorySizeInBytes() const = 0;
 };
 
-struct RowIdClusterMapping {
-	uint32_t cluster_id;
-	uint32_t index_in_cluster;
+struct PDXearchRowGroupBounds {
+	row_t row_start;
+	idx_t count;
 };
 
-// All state required for storing a row group's embeddings and searching them.
-template <PDX::Quantization Q>
-class PDXRowGroup {
-public:
-	// Row group embedding storage and metadata.
-	std::unique_ptr<PDX::IVF<Q>> index;
-	std::vector<RowIdClusterMapping> row_id_metadata {DEFAULT_ROW_GROUP_SIZE};
-
+struct PDXRowGroup {
+	row_t row_start;
+	row_t row_end;
 	std::unique_ptr<PDX::ADSamplingPruner> pruner;
-	std::unique_ptr<PDX::PDXearch<Q>> searcher;
+	std::unique_ptr<PDX::IPDXIndex> index;
+	// Held while the index is built, so that rows of this row group arriving in a later batch wait for it.
+	std::mutex mutex;
 
-	// Returns the in-memory size of the persistent elements of the row group in bytes.
 	uint64_t GetInMemorySizeInBytes() const {
-		uint64_t in_memory_size_in_bytes = sizeof(*this);
-		in_memory_size_in_bytes += index->GetInMemorySizeInBytes();
-		in_memory_size_in_bytes += row_id_metadata.capacity() * sizeof(*row_id_metadata.data());
-		return in_memory_size_in_bytes;
+		return sizeof(*this) + (index ? index->GetInMemorySizeInBytes() : 0);
 	}
 };
 
@@ -120,22 +107,22 @@ public:
 // group. This allows the creation of the index and searching in it to be parallelized at the row group level.
 template <PDX::Quantization Q>
 class PDXearchWrapperParallel : public PDXearchWrapper {
-public:
-	using embedding_storage_t = PDX::pdx_data_t<Q>;
-
 private:
-	std::vector<PDXRowGroup<Q>> row_groups;
-	// TODO: Reevaluate whether we need this row group initialization guard once we properly support non-full row
-	// groups. This mutex guards row_groups_initialized to detect concurrent or repeated SetUpIndexForRowGroup calls for
-	// the same row group.
-	std::mutex row_group_init_mutex;
-	std::vector<bool> row_groups_initialized;
+	const idx_t row_group_size;
+	// Sorted by row_start. Structural changes only happen during the index build and under the index's exclusive lock,
+	// so scans read it without locking.
+	std::vector<unique_ptr<PDXRowGroup>> row_groups;
+	// Lock for the above vector structure.
+	std::mutex row_groups_mutex;
 
 public:
+	// Below this many embeddings a row group is not worth clustering and gets an exact Flat index.
+	static constexpr size_t MIN_EMBEDDINGS_FOR_CLUSTERING = 2048;
+
 	// The number of clusters depends on the number of embeddings in the row group. We have three levels.
 	// In general we aim for a 1:256 ratio of clusters to embeddings.
 	static constexpr size_t ComputeNumClustersForRowGroup(const size_t num_embeddings) {
-		if (num_embeddings < 2048) {
+		if (num_embeddings < MIN_EMBEDDINGS_FOR_CLUSTERING) {
 			// 1. No clustering: not worth indexing. One cluster minimizes overhead.
 			return 1;
 		} else if (num_embeddings < static_cast<size_t>(DEFAULT_ROW_GROUP_SIZE * 0.25)) {
@@ -150,159 +137,162 @@ public:
 	}
 
 	PDXearchWrapperParallel(PDX::DistanceMetric distance_metric, uint32_t num_dimensions, uint32_t n_probe,
-	                        int32_t seed, idx_t estimated_cardinality)
-	    : PDXearchWrapper(Q, distance_metric, num_dimensions, n_probe, seed) {
-		if (estimated_cardinality == 0) {
-			throw InternalException(
-			    "Something went wrong: estimated_cardinality is 0. This is likely because a malformed persisted index "
-			    "was loaded. Index persistence is not supported yet, but DuckDB will still try to persist it. Open "
-			    "your database file manually (duckdb test.db) and drop the index(es). Run 'SELECT sql FROM "
-			    "duckdb_indexes();' to see the indexes, and then 'DROP INDEX index_name;' to drop the unused "
-			    "index(es).");
-		}
-		const idx_t estimated_num_row_groups =
-		    static_cast<idx_t>(std::ceil((float)estimated_cardinality / DEFAULT_ROW_GROUP_SIZE));
-		D_ASSERT(estimated_num_row_groups > 0);
-		row_groups.resize(estimated_num_row_groups);
-		row_groups_initialized.resize(estimated_num_row_groups, false);
+	                        int32_t seed, idx_t row_group_size)
+	    : PDXearchWrapper(Q, distance_metric, num_dimensions, n_probe, seed), row_group_size(row_group_size) {
 	}
 
-	// Initialize the wrapper's state for this row group. This is called once per row group.
+	idx_t GetRowGroupSize() const {
+		return row_group_size;
+	}
+
+	// Builds the index of the row group [row_start, row_start + count) from its (non-NULL) rows. Rows of this row
+	// group that arrive in a later batch are appended to the index that was already built.
 	void SetUpIndexForRowGroup(const row_t *const row_ids, const float *const embeddings, const idx_t num_embeddings,
-	                           const idx_t row_group_id) {
+	                           const row_t row_start, const idx_t count) {
+		D_ASSERT(num_embeddings > 0 && num_embeddings <= count);
+		PDXRowGroup *row_group = nullptr;
+		std::unique_lock<std::mutex> build_lock;
 		{
-			const std::lock_guard<std::mutex> lock(row_group_init_mutex);
-			if (row_groups_initialized[row_group_id]) {
-				throw InternalException(
-				    "Row group %llu is being initialized a second time (n_emb=%llu). This means that the DuckDB "
-				    "physical row groups are not aligned with the expected row group size of %llu. See the limitations "
-				    "section in the README for more details. Use `CALL pragma_storage_info('table_name');` to inspect "
-				    "the row group sizes of your table. All row groups in the table, except the last one, must contain "
-				    "exactly %llu rows. So 122880, 122880, 4000 is allowed, but 122880, 100000, 4000 is not.",
-				    row_group_id, num_embeddings, DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE);
+			const std::lock_guard<std::mutex> lock(row_groups_mutex);
+			auto it =
+			    std::lower_bound(row_groups.begin(), row_groups.end(), row_start,
+			                     [](const unique_ptr<PDXRowGroup> &rg, row_t start) { return rg->row_start < start; });
+			// Rare case: If the row group already exists, we will append to it
+			// This happens when parallel scan hands rows of the same rowgroup to more than one task
+			if (it != row_groups.end() && (*it)->row_start == row_start) {
+				row_group = it->get();
+			} else {
+				// Common path:
+				// No rowgroup index exists yet: create one and build the index under its mutex.
+				auto new_row_group = make_uniq<PDXRowGroup>();
+				new_row_group->row_start = row_start;
+				new_row_group->row_end = row_start + static_cast<row_t>(count);
+				new_row_group->pruner = make_uniq<PDX::ADSamplingPruner>(GetNumDimensions(), rotation_matrix.get());
+				row_group = new_row_group.get();
+				build_lock = std::unique_lock<std::mutex>(row_group->mutex);
+				row_groups.insert(it, std::move(new_row_group));
 			}
-			row_groups_initialized[row_group_id] = true;
 		}
 
-		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
-
-		const auto num_clusters = ComputeNumClustersForRowGroup(num_embeddings);
-		const auto num_dimensions = GetNumDimensions();
-		// Additional constraints on the number of dimensions are enforced in `pdxearch_index_plan.cpp`.
-		D_ASSERT(num_dimensions > 0);
-		D_ASSERT(num_embeddings > 0);
-		D_ASSERT(num_clusters > 0);
-		D_ASSERT(num_embeddings >= num_clusters);
-
-		float quantization_base = 0.0f;
-		float quantization_scale = 1.0f;
-		if constexpr (Q == PDX::U8) {
-			const auto params = PDX::ScalarQuantizer<Q>::ComputeQuantizationParams(
-			    embeddings, static_cast<size_t>(num_embeddings) * num_dimensions);
-			quantization_base = params.quantization_base;
-			quantization_scale = params.quantization_scale;
-			row_group.index = make_uniq<PDX::IVF<Q>>(num_dimensions, num_embeddings, num_clusters, IsNormalized(),
-			                                         quantization_scale, quantization_base);
-		} else {
-			row_group.index = make_uniq<PDX::IVF<Q>>(num_dimensions, num_embeddings, num_clusters, IsNormalized());
+		if (build_lock.owns_lock()) {
+			row_group->index = BuildRowGroupIndex(*row_group, row_ids, embeddings, num_embeddings);
+			return;
 		}
-		row_group.pruner = make_uniq<PDX::ADSamplingPruner>(num_dimensions, rotation_matrix.get());
-
-		// Compute K-means centroids and embedding-to-centroid assignment (always on float embeddings).
-		PDX::KMeansResult kmeans_result = PDX::ComputeKMeans(
-		    embeddings, num_embeddings, num_dimensions, num_clusters, GetDistanceMetric(), GetSeed(),
-		    /*normalize=*/false, /*sampling_fraction=*/0.0f, /*kmeans_iters=*/8, /*hierarchical_indexing=*/true,
-		    /*n_threads=*/1);
-
-		// Store centroids.
-		row_group.index->centroids = std::move(kmeans_result.centroids);
-
-		// Row-major buffer that the current cluster's embeddings are "gathered" into. This buffer is the source for
-		// StoreClusterEmbeddings, the result of which is persistently stored in the index. The buffer is reused across
-		// clusters. For F32: buffer is float. For U8: buffer is uint8_t (quantized).
-		size_t max_cluster_size = 0;
-		for (size_t i = 0; i < num_clusters; i++) {
-			max_cluster_size = std::max(max_cluster_size, kmeans_result.assignments[i].size());
+		// Rare path
+		// Only reached when DuckDB splits a row group over several scan tasks (e.g. PRAGMA verify_parallelism hands
+		// out one vector per task): the first batch built the index above, the later ones are appended to it.
+		const std::lock_guard<std::mutex> lock(row_group->mutex);
+		for (idx_t i = 0; i < num_embeddings; i++) {
+			row_group->index->Append(static_cast<size_t>(row_ids[i]), embeddings + i * GetNumDimensions());
 		}
-		auto tmp_cluster_embeddings =
-		    std::make_unique<embedding_storage_t[]>(static_cast<uint64_t>(max_cluster_size * num_dimensions));
-
-		// Set up the IVF clusters' metadata and store the embeddings.
-		for (size_t cluster_idx = 0; cluster_idx < num_clusters; cluster_idx++) {
-			const auto cluster_size = kmeans_result.assignments[cluster_idx].size();
-			// The index is read-only once built, so the clusters are allocated without any growth headroom.
-			auto &cluster = row_group.index->clusters.emplace_back(cluster_size, cluster_size, num_dimensions);
-			cluster.id = cluster_idx;
-
-			for (size_t position_in_cluster = 0; position_in_cluster < cluster_size; position_in_cluster++) {
-				const auto embedding_idx = kmeans_result.assignments[cluster_idx][position_in_cluster];
-				const row_t row_id = row_ids[embedding_idx];
-
-				row_group.row_id_metadata[row_id % DEFAULT_ROW_GROUP_SIZE] = {
-				    static_cast<uint32_t>(cluster_idx), static_cast<uint32_t>(position_in_cluster)};
-				cluster.indices[position_in_cluster] = row_id;
-
-				if constexpr (Q == PDX::U8) {
-					PDX::ScalarQuantizer<Q> quantizer(num_dimensions);
-					quantizer.QuantizeEmbedding(embeddings + (embedding_idx * num_dimensions), quantization_base,
-					                            quantization_scale,
-					                            tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions));
-				} else {
-					memcpy(tmp_cluster_embeddings.get() + (position_in_cluster * num_dimensions),
-					       embeddings + (embedding_idx * num_dimensions), num_dimensions * sizeof(float));
-				}
-			}
-
-			PDX::StoreClusterEmbeddings<Q, embedding_storage_t>(cluster, *row_group.index, tmp_cluster_embeddings.get(),
-			                                                    cluster_size);
-		}
-
-		// Computes the cluster offsets, total capacity and max cluster capacity that the searcher and the predicate
-		// evaluator rely on. Must happen after all clusters have been created.
-		row_group.index->ComputeClusterOffsets();
-
-		// Note: the searcher depends on a fully initialized index in its constructor.
-		row_group.searcher = make_uniq<PDX::PDXearch<Q>>(*row_group.index, *row_group.pruner);
 	}
 
-	unique_ptr<PDX::IIterativeSearch> BeginSearchForRowGroup(const idx_t row_group_id,
+	unique_ptr<PDX::IIterativeSearch> BeginSearchForRowGroup(const idx_t row_group_idx,
 	                                                         const float *const preprocessed_query_embedding,
 	                                                         const idx_t limit, PDX::TopKHeap &top_k_heap,
-	                                                         const std::vector<row_t> *const passing_row_ids) {
-		PDXRowGroup<Q> &row_group = row_groups[row_group_id];
-		const auto k = static_cast<uint32_t>(limit);
-		if (!passing_row_ids) {
-			return make_uniq<typename PDX::PDXearch<Q>::template IterativeSearch<false>>(
-			    row_group.searcher->BeginIterativeSearch(preprocessed_query_embedding, k, top_k_heap,
-			                                             /*is_query_transformed=*/true));
-		}
-		auto predicate_evaluator =
-		    std::make_unique<PDX::PredicateEvaluator>(CreatePredicateEvaluatorForRowGroup(*passing_row_ids, row_group));
-		return make_uniq<typename PDX::PDXearch<Q>::template IterativeSearch<true>>(
-		    row_group.searcher->BeginFilteredIterativeSearch(preprocessed_query_embedding, k,
-		                                                     std::move(predicate_evaluator), top_k_heap,
-		                                                     /*is_query_transformed=*/true));
+	                                                         const std::vector<size_t> *const passing_row_ids) {
+		auto search_cursor = row_groups[row_group_idx]->index->BeginIterativeSearch(
+		    preprocessed_query_embedding, static_cast<uint32_t>(limit), top_k_heap, passing_row_ids,
+		    /*is_query_transformed=*/true);
+		return unique_ptr<PDX::IIterativeSearch>(search_cursor.release());
 	}
 
-	static PDX::PredicateEvaluator CreatePredicateEvaluatorForRowGroup(const std::vector<row_t> &passing_row_ids,
-	                                                                   const PDXRowGroup<Q> &row_group) {
-		// The selection vector is indexed by the index's capacity-based cluster offsets.
-		PDX::PredicateEvaluator predicate_evaluator(row_group.index->num_clusters, row_group.index->total_capacity);
-
-		for (auto &row_id : passing_row_ids) {
-			const auto &[cluster_id, index_in_cluster] = row_group.row_id_metadata[row_id % DEFAULT_ROW_GROUP_SIZE];
-			predicate_evaluator.n_passing_tuples[cluster_id]++;
-			predicate_evaluator.selection_vector[(row_group.index->cluster_offsets[cluster_id]) + index_in_cluster] = 1;
+	// Maintenance, one writer at a time (the index's exclusive lock). The row belongs to the DuckDB row group that
+	// `row_groups[row_group_idx]` mirrors; the row group's end grows with it.
+	// If the rowgroup is a Flat index and it has enough embeddings, it is promoted to an IVF index.
+	void AppendRow(const idx_t row_group_idx, const row_t row_id, const float *const transformed_embedding) {
+		auto &row_group = *row_groups[row_group_idx];
+		D_ASSERT(row_id >= row_group.row_start);
+		// Rare: a rebuild of this row group (e.g., a checkpoint merge) ran earlier in the same
+		// sync and fetched all its committed rows, including (some) staged ones. The staged range now
+		// brings them here a second time.
+		if (row_group.index->GetRowIdMapping(static_cast<size_t>(row_id)).first != PDX::DELETED_MARKER) {
+			return;
 		}
+		row_group.index->Append(static_cast<size_t>(row_id), transformed_embedding);
+		row_group.row_end = MaxValue<row_t>(row_group.row_end, row_id + 1);
+		auto flat_index = dynamic_cast<PDX::FlatIndex *>(row_group.index.get());
+		if (flat_index && flat_index->GetClusterSize(0) >= MIN_EMBEDDINGS_FOR_CLUSTERING) {
+			PromoteToIVF(row_group, *flat_index);
+		}
+	}
 
-		return predicate_evaluator;
+	void DeleteRow(const row_t row_id) {
+		const auto row_group_idx = LookupRowGroup(row_id);
+		if (row_group_idx.IsValid()) {
+			row_groups[row_group_idx.GetIndex()]->index->Delete(static_cast<size_t>(row_id));
+		}
+	}
+
+	// Position in `row_groups` of the row group holding row_id.
+	optional_idx LookupRowGroup(const row_t row_id) const {
+		auto it = std::upper_bound(row_groups.begin(), row_groups.end(), row_id,
+		                           [](row_t id, const unique_ptr<PDXRowGroup> &rg) { return id < rg->row_start; });
+		if (it == row_groups.begin()) {
+			return optional_idx();
+		}
+		--it;
+		if (row_id >= (*it)->row_end) {
+			return optional_idx();
+		}
+		return optional_idx(static_cast<idx_t>(it - row_groups.begin()));
+	}
+
+	const PDXRowGroup &GetRowGroup(const idx_t row_group_idx) const {
+		return *row_groups[row_group_idx];
+	}
+
+	std::vector<PDXearchRowGroupBounds>
+	FindStaleRowGroups(const std::vector<PDXearchRowGroupBounds> &physical_row_groups) const {
+		std::vector<PDXearchRowGroupBounds> stale;
+		idx_t mirror_idx = 0;
+		row_t table_end = 0;
+		// The physical row groups are the ones in the DuckDB table, and the mirror row groups are the ones in the
+		// index.
+		for (const auto &physical : physical_row_groups) {
+			const row_t physical_end = physical.row_start + static_cast<row_t>(physical.count);
+			table_end = physical_end;
+			idx_t overlapping = 0;
+			bool aligned = true;
+			while (mirror_idx < row_groups.size() && row_groups[mirror_idx]->row_start < physical_end) {
+				const auto &mirror = *row_groups[mirror_idx];
+				if (mirror.row_end > physical.row_start) {
+					overlapping++;
+					aligned = aligned && mirror.row_start == physical.row_start && mirror.row_end <= physical_end;
+				}
+				if (mirror.row_end > physical_end) {
+					break; // Also overlaps the next row group, which is then flagged as well.
+				}
+				mirror_idx++;
+			}
+			if (overlapping > 1 || (overlapping == 1 && !aligned)) {
+				stale.push_back(physical);
+			}
+		}
+		for (; mirror_idx < row_groups.size(); mirror_idx++) {
+			const auto &mirror = *row_groups[mirror_idx];
+			// Mirroring rowgroups that are beyond the end of the table
+			if (mirror.row_start >= table_end) {
+				stale.push_back({mirror.row_start, static_cast<idx_t>(mirror.row_end - mirror.row_start)});
+			}
+		}
+		return stale;
+	}
+
+	void RemoveRowGroupsOverlapping(const row_t start, const row_t end) {
+		const std::lock_guard<std::mutex> lock(row_groups_mutex);
+		row_groups.erase(std::remove_if(row_groups.begin(), row_groups.end(),
+		                                [&](const unique_ptr<PDXRowGroup> &row_group) {
+			                                return row_group->row_start < end && row_group->row_end > start;
+		                                }),
+		                 row_groups.end());
 	}
 
 	idx_t GetTotalNumClusters() const {
 		idx_t total = 0;
 		for (const auto &row_group : row_groups) {
-			if (row_group.index) {
-				total += row_group.index->num_clusters;
+			if (row_group->index) {
+				total += row_group->index->GetNumClusters();
 			}
 		}
 		return total;
@@ -315,9 +305,51 @@ public:
 	uint64_t GetInMemorySizeInBytes() const override {
 		uint64_t in_memory_size_in_bytes = sizeof(*this);
 		for (const auto &row_group : row_groups) {
-			in_memory_size_in_bytes += row_group.GetInMemorySizeInBytes();
+			in_memory_size_in_bytes += row_group->GetInMemorySizeInBytes();
 		}
 		return in_memory_size_in_bytes;
+	}
+
+private:
+	PDX::PDXIndexConfig MakeIndexConfig(const row_t row_start, const idx_t num_embeddings) const {
+		PDX::PDXIndexConfig config;
+		config.num_dimensions = GetNumDimensions();
+		config.distance_metric = GetDistanceMetric();
+		config.seed = static_cast<uint32_t>(GetSeed());
+		config.num_clusters = static_cast<uint32_t>(ComputeNumClustersForRowGroup(num_embeddings));
+		config.kmeans_iters = 8;
+		config.hierarchical_indexing = true;
+		config.n_threads = 1;
+		config.is_data_transformed = true;
+		config.base_row_id = static_cast<size_t>(row_start);
+		return config;
+	}
+
+	unique_ptr<PDX::IPDXIndex> BuildRowGroupIndex(const PDXRowGroup &row_group, const row_t *const row_ids,
+	                                              const float *const embeddings, const idx_t num_embeddings) const {
+		const auto config = MakeIndexConfig(row_group.row_start, num_embeddings);
+		std::vector<size_t> ids(num_embeddings);
+		for (idx_t i = 0; i < num_embeddings; i++) {
+			ids[i] = static_cast<size_t>(row_ids[i]);
+		}
+
+		if (num_embeddings < MIN_EMBEDDINGS_FOR_CLUSTERING) {
+			auto flat_index = make_uniq<PDX::FlatIndex>(config, *row_group.pruner);
+			flat_index->BuildIndex(ids.data(), embeddings, num_embeddings);
+			return std::move(flat_index);
+		}
+		auto ivf_index = make_uniq<PDX::PDXIndex<Q>>(config, *row_group.pruner);
+		ivf_index->BuildIndex(ids.data(), embeddings, num_embeddings);
+		return std::move(ivf_index);
+	}
+
+	void PromoteToIVF(PDXRowGroup &row_group, const PDX::FlatIndex &flat_index) {
+		const auto row_ids = flat_index.GetRowIds();
+		const auto embeddings = flat_index.GetEmbeddings();
+		auto ivf_index =
+		    make_uniq<PDX::PDXIndex<Q>>(MakeIndexConfig(row_group.row_start, row_ids.size()), *row_group.pruner);
+		ivf_index->BuildIndex(row_ids.data(), embeddings.get(), row_ids.size());
+		row_group.index = std::move(ivf_index);
 	}
 };
 
