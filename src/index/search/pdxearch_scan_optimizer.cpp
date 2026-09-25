@@ -359,7 +359,6 @@ public:
 	                                       const idx_t embedding_column_position,
 	                                       vector<reference<BoundColumnRefExpression>> &forwards) {
 		const auto &column_ids = get.GetColumnIds();
-		// To support Filter on the rowid (the scan already emits the rowid, which is reused instead).
 		for (auto &column_id : column_ids) {
 			if (column_id.IsRowIdColumn()) {
 				return false;
@@ -384,7 +383,7 @@ public:
 		};
 		for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
 			auto &op = it->get();
-			// To support Filter reading the embedding (the scan keeps the embedding and appends the rowid instead).
+			// To support filter reading the embedding (the scan keeps the embedding and appends the rowid instead).
 			if (op.type == LogicalOperatorType::LOGICAL_FILTER) {
 				for (auto &expression : op.expressions) {
 					if (reads_embedding(expression)) {
@@ -430,10 +429,7 @@ public:
 		// Above the filtered search the embedding is fetched again by rowid, so below it the scan only needs it for
 		// predicates. If no predicate reads it and the scan has no rowid yet, the rowid takes the embedding's slot:
 		// the chain forwards it along the embedding's path, and the filter pipeline no longer reads embeddings.
-		// To support the chain cases whose predicates do not read the embedding: OR or sparse IN on one column,
-		// Predicates over two or more columns, Conjunction left after pushdown, Volatile predicate, Selective residual
-		// filter, Subquery or view with a residual filter, IN list of at least five constants, IN lists combined with
-		// other predicates, Subqueries as filters, our table on the probe side.
+		// To support the chain cases whose predicates do not read the embedding.
 		vector<reference<BoundColumnRefExpression>> forwards;
 		if (embedding_column_position.IsValid() &&
 		    CanReplaceEmbeddingByRowId(get, chain, embedding_column_position.GetIndex(), forwards)) {
@@ -462,7 +458,7 @@ public:
 		}
 		ColumnBinding rowid_binding(get.table_index, rowid_position);
 		for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-			// To support Subquery or view with a residual filter.
+			// To support subquery or view with a residual filter.
 			if (it->get().type == LogicalOperatorType::LOGICAL_PROJECTION) {
 				auto &projection = it->get().Cast<LogicalProjection>();
 				projection.expressions.push_back(
@@ -533,7 +529,7 @@ public:
 
 		// Follow the TopN key through projections that only forward it (e.g. `ORDER BY d` over a subquery that computes
 		// d) to the projection that computes the distance. The forwarding projections stay above the search.
-		// Needed to support Distance aliased in a subquery.
+		// Needed to support distance aliased in a subquery.
 		reference<LogicalProjection> distance_projection = top_n.children.front()->Cast<LogicalProjection>();
 		ColumnBinding distance_binding = bound_column_ref.binding;
 		while (distance_binding.column_index < distance_projection.get().expressions.size() &&
@@ -638,7 +634,7 @@ public:
 
 			// The index expression is bound to the table scan, the argument reads it through the chain: compare the
 			// argument traced down to the table scan.
-			// Needed to support Renamed embedding
+			// Needed to support a renamed embedding column.
 			// (and every case with a projection between the distance and the scan).
 			const auto is_index_expression = [&](const Expression &argument) {
 				if (argument.type != ExpressionType::BOUND_COLUMN_REF) {

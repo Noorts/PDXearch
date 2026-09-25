@@ -162,7 +162,7 @@ SinkResultType PhysicalPDXearchIndexFilteredScan::Sink(ExecutionContext &context
 			// Runs arrive in increasing row group order, except the rows a hash join below this search spills to disk:
 			// the join replays them after the scan, one hash partition at a time, so rows of a row group whose search
 			// already started can arrive again. They get a search of their own; the searches cover disjoint rows and
-			// feed the same heap. To support Subqueries as filters, our table on the probe side (a spilled join).
+			// feed the same heap.
 			// TODO: Gather out-of-order rows per row group and search each row group once.
 			// The run of the current row group ended: start its filtered search.
 			if (!l_sink.current_row_group_passing_rowids.empty()) {

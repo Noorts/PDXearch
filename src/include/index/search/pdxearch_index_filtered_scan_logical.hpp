@@ -17,7 +17,7 @@ public:
 	}
 
 	// The table columns fetched by rowid for the results, and the bindings they are emitted under: those the operator
-	// above reads. To support Filtered subquery and Subquery or view with a residual filter.
+	// above reads.
 	vector<ColumnIndex> column_ids;
 	vector<ColumnBinding> column_bindings;
 
