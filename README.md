@@ -168,10 +168,17 @@ As mentioned above, we aim to address all of these limitations soon.
   handle DuckDB's late materialization optimizer rule yet. Filtered searches
   support any predicate on the indexed table's own columns that DuckDB evaluates
   in the table scan or in filter operators directly above it (e.g. comparisons,
-  `OR`s across columns, expressions over several columns). Predicates that DuckDB
-  plans as joins (`IN` lists of many constants, `IN` and `EXISTS` subqueries),
-  searches over views or subqueries that select from the table, and joins with
-  other tables still run without the index. You can check whether your query is
+  `OR`s across columns, expressions over several columns, `IN` and `NOT IN` lists
+  of constants, `IN` and `EXISTS` subqueries), also when the search runs over a
+  view or a subquery of the table. Searches that read a value such a subquery
+  computes (e.g. `id * 2 AS x`), subqueries whose result is larger than the
+  indexed table, correlated subqueries, and joins with other tables still run
+  without the index. When the hash join of a subquery spills to disk, the rows it
+  replays reach the search out of order and cost extra search work, which can make
+  the query slower than without the index. When DuckDB compresses the join key of
+  a subquery join (subquery results of at least 1,048,576 rows; every subquery
+  join in debug builds), searches that read that key, e.g. `SELECT id FROM t WHERE
+  id IN (SELECT ...)`, run without the index (TODO). You can check whether your query is
   currently being optimized by prepending the `EXPLAIN` keyword to your search
   query and checking if a PDXearch operator is part of the query plan.
 

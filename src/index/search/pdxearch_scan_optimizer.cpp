@@ -5,10 +5,12 @@
 #include "duckdb/optimizer/remove_unused_columns.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_top_n.hpp"
+#include "duckdb/planner/table_filter.hpp"
 #include "duckdb/storage/data_table.hpp"
 
 #include "index/pdxearch_blob_codec.hpp"
@@ -176,6 +178,23 @@ namespace duckdb {
  * not optimized. Projections that only forward the distance (`ORDER BY d` over
  * a subquery that computes d) stay above the search.
  *
+ * DuckDB turns an IN list of at least five constants that stays in a FILTER
+ * into a MARK join between the filter's child and a scan of the constants, and
+ * the FILTER tests the join's marker (e.g. `cat = 3 OR id IN (...)`). The MARK
+ * join keeps every row of its left child, so it is part of the chain as well:
+ * it stays below the search, evaluates the list, and forwards the rowid. A
+ * query that reads the marker as a value (IN in the SELECT list) is not
+ * optimized.
+ *
+ * Subqueries used as filters join the chain the same way when the indexed
+ * table is the join's left child (the probe side): IN and EXISTS become a SEMI
+ * join, NOT EXISTS an ANTI join, and an IN subquery inside a larger predicate
+ * (e.g. `NOT IN (SELECT ...)`) a MARK join. These joins keep each row of the
+ * table at most once, and keep the runtime filters DuckDB pushes from them into
+ * the table scan. When DuckDB builds the hash table on the indexed table
+ * instead (RIGHT_SEMI / RIGHT_ANTI), or leaves a correlated subquery as a
+ * DELIM_JOIN, the query is not optimized.
+ *
  *              IN                                  OUT
  * ┌───────────────────────────┐        ┌───────────────────────────┐
  * │         PROJECTION        │        │         PROJECTION        │
@@ -252,9 +271,39 @@ public:
 		optimize_function = Optimize;
 	}
 
+	// The operators the chain between the projection and the table scan may hold, each continuing into children[0]:
+	// FILTER operators, projections (subqueries and views), and the joins that keep each row of their left child at
+	// most once. DuckDB plans IN and EXISTS subqueries as SEMI joins and NOT EXISTS as an ANTI join. A MARK join keeps
+	// every row of its left child and adds a marker column, which a FILTER above it tests: DuckDB makes one of an IN
+	// list of at least five constants (the right child is then a column data scan) and of an IN subquery inside a
+	// larger predicate (e.g. `NOT IN (SELECT ...)`, `cat = 3 OR id IN (SELECT ...)`).
+	static bool IsChainOperator(const LogicalOperator &op) {
+		switch (op.type) {
+		// To support: OR or sparse IN on one column, Predicates over two or more columns, Conjunction left after
+		// pushdown, Volatile predicate, Selective residual filter, Filter reading the embedding, Filter on the rowid,
+		// Subquery or view with a residual filter.
+		case LogicalOperatorType::LOGICAL_FILTER:
+		// To support: Filtered subquery, Subquery or view with a residual filter, View or subquery without a predicate,
+		// Renamed embedding.
+		case LogicalOperatorType::LOGICAL_PROJECTION:
+			return op.children.size() == 1;
+		// To support: IN list of at least five constants and IN lists combined with other predicates (MARK), Subqueries
+		// as filters, our table on the probe side (SEMI, ANTI, MARK).
+		case LogicalOperatorType::LOGICAL_COMPARISON_JOIN: {
+			const auto join_type = op.Cast<LogicalComparisonJoin>().join_type;
+			return op.children.size() == 2 &&
+			       (join_type == JoinType::SEMI || join_type == JoinType::ANTI || join_type == JoinType::MARK);
+		}
+		default:
+			return false;
+		}
+	}
+
 	// Follows a binding read above chain.front() down the chain (ordered from the top down to the table scan) to the
 	// table scan's binding it comes from. A filter forwards its child's bindings, and a projection forwards a binding
 	// when its expression is a plain column reference. False when a projection computes the value instead.
+	// To support: Filtered subquery, Subquery or view with a residual filter, View or subquery without a predicate,
+	// Renamed embedding.
 	static bool TryTraceToTableScan(const vector<reference<LogicalOperator>> &chain, ColumnBinding &binding) {
 		for (auto &op : chain) {
 			if (op.get().type != LogicalOperatorType::LOGICAL_PROJECTION) {
@@ -277,6 +326,7 @@ public:
 	// Collects the bindings the projection reads from its child, and the table scan's column each one traces to: an
 	// index scan replacing the projection's child emits those columns, fetched by rowid, under those bindings. False
 	// when the projection reads a value that the chain computes.
+	// To support: Filtered subquery, Subquery or view with a residual filter, View or subquery without a predicate.
 	static bool TryCollectOutputColumns(LogicalProjection &projection, const vector<reference<LogicalOperator>> &chain,
 	                                    const LogicalGet &get, vector<ColumnBinding> &bindings,
 	                                    vector<ColumnIndex> &column_ids) {
@@ -309,6 +359,7 @@ public:
 	                                       const idx_t embedding_column_position,
 	                                       vector<reference<BoundColumnRefExpression>> &forwards) {
 		const auto &column_ids = get.GetColumnIds();
+		// To support Filter on the rowid (the scan already emits the rowid, which is reused instead).
 		for (auto &column_id : column_ids) {
 			if (column_id.IsRowIdColumn()) {
 				return false;
@@ -333,6 +384,7 @@ public:
 		};
 		for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
 			auto &op = it->get();
+			// To support Filter reading the embedding (the scan keeps the embedding and appends the rowid instead).
 			if (op.type == LogicalOperatorType::LOGICAL_FILTER) {
 				for (auto &expression : op.expressions) {
 					if (reads_embedding(expression)) {
@@ -341,6 +393,18 @@ public:
 				}
 				continue;
 			}
+			// To support: IN list of at least five constants, IN lists combined with other predicates, Subqueries as
+			// filters, our table on the probe side.
+			if (op.type == LogicalOperatorType::LOGICAL_COMPARISON_JOIN) {
+				// A join's predicate is its condition, whose left side reads the chain below it.
+				for (auto &condition : op.Cast<LogicalComparisonJoin>().conditions) {
+					if (reads_embedding(condition.left)) {
+						return false;
+					}
+				}
+				continue;
+			}
+			// To support: Subquery or view with a residual filter, Renamed embedding (projections that forward it).
 			auto &projection = op.Cast<LogicalProjection>();
 			vector<ColumnBinding> forwarded_bindings;
 			for (idx_t i = 0; i < projection.expressions.size(); i++) {
@@ -366,6 +430,10 @@ public:
 		// Above the filtered search the embedding is fetched again by rowid, so below it the scan only needs it for
 		// predicates. If no predicate reads it and the scan has no rowid yet, the rowid takes the embedding's slot:
 		// the chain forwards it along the embedding's path, and the filter pipeline no longer reads embeddings.
+		// To support the chain cases whose predicates do not read the embedding: OR or sparse IN on one column,
+		// Predicates over two or more columns, Conjunction left after pushdown, Volatile predicate, Selective residual
+		// filter, Subquery or view with a residual filter, IN list of at least five constants, IN lists combined with
+		// other predicates, Subqueries as filters, our table on the probe side.
 		vector<reference<BoundColumnRefExpression>> forwards;
 		if (embedding_column_position.IsValid() &&
 		    CanReplaceEmbeddingByRowId(get, chain, embedding_column_position.GetIndex(), forwards)) {
@@ -377,6 +445,7 @@ public:
 		}
 		// Otherwise the scan emits the rowid as well, and every operator of the chain forwards it. Appending keeps the
 		// positions of the other columns, which bindings and projection maps refer to.
+		// To support: Filter reading the embedding (rowid appended), Filter on the rowid (existing rowid reused).
 		idx_t rowid_position = column_ids.size();
 		for (idx_t i = 0; i < column_ids.size(); i++) {
 			if (column_ids[i].IsRowIdColumn()) {
@@ -393,6 +462,7 @@ public:
 		}
 		ColumnBinding rowid_binding(get.table_index, rowid_position);
 		for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+			// To support Subquery or view with a residual filter.
 			if (it->get().type == LogicalOperatorType::LOGICAL_PROJECTION) {
 				auto &projection = it->get().Cast<LogicalProjection>();
 				projection.expressions.push_back(
@@ -400,7 +470,12 @@ public:
 				rowid_binding = ColumnBinding(projection.table_index, projection.expressions.size() - 1);
 				continue;
 			}
-			auto &projection_map = it->get().Cast<LogicalFilter>().projection_map;
+			// A FILTER and a join forward the bindings of children[0], trimmed by a projection map when it is set.
+			// To support: the FILTER cases listed in IsChainOperator, IN list of at least five constants, IN lists
+			// combined with other predicates, Subqueries as filters, our table on the probe side.
+			auto &projection_map = it->get().type == LogicalOperatorType::LOGICAL_FILTER
+			                           ? it->get().Cast<LogicalFilter>().projection_map
+			                           : it->get().Cast<LogicalComparisonJoin>().left_projection_map;
 			if (projection_map.empty()) {
 				continue;
 			}
@@ -458,6 +533,7 @@ public:
 
 		// Follow the TopN key through projections that only forward it (e.g. `ORDER BY d` over a subquery that computes
 		// d) to the projection that computes the distance. The forwarding projections stay above the search.
+		// To support Distance aliased in a subquery.
 		reference<LogicalProjection> distance_projection = top_n.children.front()->Cast<LogicalProjection>();
 		ColumnBinding distance_binding = bound_column_ref.binding;
 		while (distance_binding.column_index < distance_projection.get().expressions.size() &&
@@ -485,17 +561,19 @@ public:
 		const auto &projection_expr = projection.expressions[distance_binding.column_index];
 
 		// The projection must sit on top of a get, possibly with a chain of FILTER operators (the predicates DuckDB
-		// could not push into the table scan) and projections (subqueries and views) in between.
+		// could not push into the table scan), projections (subqueries and views) and joins (IN lists and subqueries)
+		// in between. IsChainOperator lists which case each kind of operator supports.
 		if (projection.children.size() != 1) {
 			return false;
 		}
 		vector<reference<LogicalOperator>> chain; // From the projection's child down to the table scan (excluded).
-		bool chain_has_filter = false;
+		// Whether the chain decides which rows pass: FILTER operators and joins do, forwarding projections do not.
+		// To support Subqueries as filters, our table on the probe side (a SEMI or ANTI join without a FILTER above it
+		// must stay below the search).
+		bool chain_filters_rows = false;
 		auto *get_ptr_ptr = &projection.children.front();
-		while ((*get_ptr_ptr)->children.size() == 1 &&
-		       ((*get_ptr_ptr)->type == LogicalOperatorType::LOGICAL_FILTER ||
-		        (*get_ptr_ptr)->type == LogicalOperatorType::LOGICAL_PROJECTION)) {
-			chain_has_filter |= (*get_ptr_ptr)->type == LogicalOperatorType::LOGICAL_FILTER;
+		while (IsChainOperator(**get_ptr_ptr)) {
+			chain_filters_rows |= (*get_ptr_ptr)->type != LogicalOperatorType::LOGICAL_PROJECTION;
 			chain.push_back(**get_ptr_ptr);
 			get_ptr_ptr = &(*get_ptr_ptr)->children.front();
 		}
@@ -562,6 +640,7 @@ public:
 
 			// The index expression is bound to the table scan, the argument reads it through the chain: compare the
 			// argument traced down to the table scan.
+			// To support Renamed embedding (and every case with a projection between the distance and the scan).
 			const auto is_index_expression = [&](const Expression &argument) {
 				if (argument.type != ExpressionType::BOUND_COLUMN_REF) {
 					return index_expr->Equals(argument);
@@ -619,6 +698,7 @@ public:
 		}
 
 		// The columns the index scan emits: those the projection reads. Checked before the plan is changed.
+		// To support: Filtered subquery, Subquery or view with a residual filter, View or subquery without a predicate.
 		vector<ColumnBinding> output_bindings;
 		vector<ColumnIndex> output_column_ids;
 		if (!TryCollectOutputColumns(projection, chain, get, output_bindings, output_column_ids)) {
@@ -635,13 +715,32 @@ public:
 		//
 		// keeps the rows of `other` among the 10 nearest rows with id < 15000 (only 4474). With the join's filters on
 		// the scan, the search would pick its neighbours among those five rows only and return all of them. The same
-		// IN inside the subquery (`WHERE id < 15000 AND id IN (SELECT x FROM other)`) is a predicate of the search.
-		get.dynamic_filters.reset();
+		// IN inside the subquery (`WHERE id < 15000 AND id IN (SELECT x FROM other)`) is a predicate of the search:
+		// the joins inside the chain keep their runtime filters, moved to a filter set that only they fill.
+		// To support: Join above the search (the scan leaves its old filter set), Subqueries as filters, our table on
+		// the probe side (the joins inside the chain move to the new one).
+		auto chain_dynamic_filters = make_shared_ptr<DynamicTableFilterSet>();
+		for (auto &op : chain) {
+			if (op.get().type != LogicalOperatorType::LOGICAL_COMPARISON_JOIN) {
+				continue;
+			}
+			auto &join = op.get().Cast<LogicalComparisonJoin>();
+			if (!join.filter_pushdown || !get.dynamic_filters) {
+				continue;
+			}
+			for (auto &probe_filter : join.filter_pushdown->probe_info) {
+				if (probe_filter.dynamic_filters == get.dynamic_filters) {
+					probe_filter.dynamic_filters = chain_dynamic_filters;
+				}
+			}
+		}
+		get.dynamic_filters = std::move(chain_dynamic_filters);
 
 		bool has_pushed_down_filters = !get.table_filters.filters.empty();
 
-		if (!chain_has_filter && !has_pushed_down_filters) {
+		if (!chain_filters_rows && !has_pushed_down_filters) {
 			// Scenario 1: Non-filtered search.
+			// To support View or subquery without a predicate (the index scan replaces the forwarding projections too).
 
 			// 1. Replace the table scan, and the projections above it that forward its columns, with the index scan.
 			auto pdxearch_index_scan = make_uniq<LogicalPDXearchIndexScan>(
@@ -658,8 +757,9 @@ public:
 				plan = std::move(top_n.children[0]);
 			}
 			return true;
-		} else if (!chain_has_filter) {
+		} else if (!chain_filters_rows) {
 			// Scenario 2: Simple filtered search.
+			// To support Filtered subquery (filter pushed into the scan; the forwarding projections are dropped).
 
 			// We have a top-n operator on top of a table scan that has pushed down filters, possibly below projections
 			// that forward its columns. The PDXearchIndexFilteredScan replaces those projections: it emits the columns
@@ -719,6 +819,8 @@ public:
 			// Scenario 3: Filtered search where FILTER operators between the projection and the table scan hold (part
 			// of) the predicate, possibly mixed with projections that forward the table scan's columns. The table scan
 			// may have pushed-down filters as well.
+			// To support every case whose chain holds a FILTER or a join: the FILTER and join cases listed in
+			// IsChainOperator, including Subquery or view with a residual filter.
 
 			// 1. The PDXearchIndexFilteredScan emits the columns the projection reads (output_bindings), fetched by
 			//    rowid, so the operators above it keep working unchanged.

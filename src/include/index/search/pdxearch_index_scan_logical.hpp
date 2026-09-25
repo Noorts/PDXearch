@@ -17,7 +17,7 @@ public:
 	}
 
 	// The table columns fetched by rowid for the results, and the bindings they are emitted under: those the operator
-	// above reads.
+	// above reads. To support View or subquery without a predicate.
 	vector<ColumnIndex> column_ids;
 	vector<ColumnBinding> column_bindings;
 

@@ -151,6 +151,7 @@ SinkResultType PhysicalPDXearchIndexFilteredScan::Sink(ExecutionContext &context
 	// outputs to them, which can come from its next morsel, so one chunk can hold the end of one run and the start of
 	// the next. The row group is looked up again whenever a row id leaves the current one, and a run's search starts
 	// when the run ends.
+	// To support Selective residual filter (rows of several row groups in one chunk).
 	for (idx_t i = 0; i < input_chunk.size(); i++) {
 		const row_t row_id = input_chunk_row_ids[i];
 		if (row_id < l_sink.current_row_group_range.start || row_id >= l_sink.current_row_group_range.end) {
@@ -159,10 +160,11 @@ SinkResultType PhysicalPDXearchIndexFilteredScan::Sink(ExecutionContext &context
 				// Rows without an embedding are not in the index.
 				continue;
 			}
-			// Runs arrive in increasing row group order. Input in any other order (rows emitted from a hash table)
-			// is not planned into this operator.
-			D_ASSERT(l_sink.current_row_group_passing_rowids.empty() ||
-			         row_group_idx.GetIndex() > l_sink.current_row_group_id);
+			// Runs arrive in increasing row group order, except the rows a hash join below this search spills to disk:
+			// the join replays them after the scan, one hash partition at a time, so rows of a row group whose search
+			// already started can arrive again. They get a search of their own; the searches cover disjoint rows and
+			// feed the same heap. To support Subqueries as filters, our table on the probe side (a spilled join).
+			// TODO: Gather out-of-order rows per row group and search each row group once.
 			// The run of the current row group ended: start its filtered search.
 			if (!l_sink.current_row_group_passing_rowids.empty()) {
 				BeginSearchForStagedRowGroup(index, g_sink, l_sink);
