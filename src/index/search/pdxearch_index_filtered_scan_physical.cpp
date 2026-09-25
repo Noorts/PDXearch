@@ -151,7 +151,6 @@ SinkResultType PhysicalPDXearchIndexFilteredScan::Sink(ExecutionContext &context
 	// outputs to them, which can come from its next morsel, so one chunk can hold the end of one run and the start of
 	// the next. The row group is looked up again whenever a row id leaves the current one, and a run's search starts
 	// when the run ends.
-	// To support Selective residual filter (rows of several row groups in one chunk).
 	for (idx_t i = 0; i < input_chunk.size(); i++) {
 		const row_t row_id = input_chunk_row_ids[i];
 		if (row_id < l_sink.current_row_group_range.start || row_id >= l_sink.current_row_group_range.end) {

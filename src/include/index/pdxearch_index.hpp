@@ -114,7 +114,6 @@ public:
 	optional_idx LookupRowGroup(row_t row_id) const;
 
 	// The row ids the index's row group at row_group_idx covers.
-	// To support Selective residual filter (the filtered scan splits chunks at row group boundaries).
 	PDXearchRowRange GetRowGroupRange(idx_t row_group_idx) const;
 
 	void SetUpIndexForRowGroup(const row_t *row_ids, const float *embeddings, idx_t num_embeddings, row_t row_start,

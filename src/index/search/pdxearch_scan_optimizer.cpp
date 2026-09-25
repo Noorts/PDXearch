@@ -533,7 +533,7 @@ public:
 
 		// Follow the TopN key through projections that only forward it (e.g. `ORDER BY d` over a subquery that computes
 		// d) to the projection that computes the distance. The forwarding projections stay above the search.
-		// To support Distance aliased in a subquery.
+		// Needed to support Distance aliased in a subquery.
 		reference<LogicalProjection> distance_projection = top_n.children.front()->Cast<LogicalProjection>();
 		ColumnBinding distance_binding = bound_column_ref.binding;
 		while (distance_binding.column_index < distance_projection.get().expressions.size() &&
@@ -568,8 +568,6 @@ public:
 		}
 		vector<reference<LogicalOperator>> chain; // From the projection's child down to the table scan (excluded).
 		// Whether the chain decides which rows pass: FILTER operators and joins do, forwarding projections do not.
-		// To support Subqueries as filters, our table on the probe side (a SEMI or ANTI join without a FILTER above it
-		// must stay below the search).
 		bool chain_filters_rows = false;
 		auto *get_ptr_ptr = &projection.children.front();
 		while (IsChainOperator(**get_ptr_ptr)) {
@@ -640,7 +638,8 @@ public:
 
 			// The index expression is bound to the table scan, the argument reads it through the chain: compare the
 			// argument traced down to the table scan.
-			// To support Renamed embedding (and every case with a projection between the distance and the scan).
+			// Needed to support Renamed embedding
+			// (and every case with a projection between the distance and the scan).
 			const auto is_index_expression = [&](const Expression &argument) {
 				if (argument.type != ExpressionType::BOUND_COLUMN_REF) {
 					return index_expr->Equals(argument);
@@ -698,7 +697,6 @@ public:
 		}
 
 		// The columns the index scan emits: those the projection reads. Checked before the plan is changed.
-		// To support: Filtered subquery, Subquery or view with a residual filter, View or subquery without a predicate.
 		vector<ColumnBinding> output_bindings;
 		vector<ColumnIndex> output_column_ids;
 		if (!TryCollectOutputColumns(projection, chain, get, output_bindings, output_column_ids)) {
@@ -717,8 +715,6 @@ public:
 		// the scan, the search would pick its neighbours among those five rows only and return all of them. The same
 		// IN inside the subquery (`WHERE id < 15000 AND id IN (SELECT x FROM other)`) is a predicate of the search:
 		// the joins inside the chain keep their runtime filters, moved to a filter set that only they fill.
-		// To support: Join above the search (the scan leaves its old filter set), Subqueries as filters, our table on
-		// the probe side (the joins inside the chain move to the new one).
 		auto chain_dynamic_filters = make_shared_ptr<DynamicTableFilterSet>();
 		for (auto &op : chain) {
 			if (op.get().type != LogicalOperatorType::LOGICAL_COMPARISON_JOIN) {
@@ -740,9 +736,8 @@ public:
 
 		if (!chain_filters_rows && !has_pushed_down_filters) {
 			// Scenario 1: Non-filtered search.
-			// To support View or subquery without a predicate (the index scan replaces the forwarding projections too).
 
-			// 1. Replace the table scan, and the projections above it that forward its columns, with the index scan.
+			// Replace the table scan, and the projections above it that forward its columns, with the index scan.
 			auto pdxearch_index_scan = make_uniq<LogicalPDXearchIndexScan>(
 			    duck_table, bind_data->index, bind_data->limit, std::move(bind_data->query_embedding),
 			    std::move(output_column_ids), std::move(output_bindings));
@@ -752,22 +747,21 @@ public:
 			projection.estimated_cardinality = top_n.estimated_cardinality;
 			projection.ResolveOperatorTypes();
 
-			// 2. Remove the TopN operator, unless it has an OFFSET to apply.
+			// Remove the TopN operator, unless it has an OFFSET to apply.
 			if (top_n.offset == 0) {
 				plan = std::move(top_n.children[0]);
 			}
 			return true;
 		} else if (!chain_filters_rows) {
 			// Scenario 2: Simple filtered search.
-			// To support Filtered subquery (filter pushed into the scan; the forwarding projections are dropped).
 
 			// We have a top-n operator on top of a table scan that has pushed down filters, possibly below projections
 			// that forward its columns. The PDXearchIndexFilteredScan replaces those projections: it emits the columns
 			// the projection above reads (output_bindings), fetched by rowid. We do the following:
-			// 1. The PDXearchIndexFilteredScan goes directly above the table scan, which the next steps change.
+			// The PDXearchIndexFilteredScan goes directly above the table scan, which the next steps change.
 
-			// 2. Set the table scan's column_ids to include only those needed for the filters and the projected rowid
-			//    column.
+			// Set the table scan's column_ids to include only those needed for the filters and the projected rowid
+			// column.
 			get.ClearColumnIds();
 			for (auto &filter_entry : get.table_filters.filters) {
 				get.AddColumnId(filter_entry.first);
@@ -785,14 +779,14 @@ public:
 				rowid_pos = get.GetColumnIds().size() - 1;
 			}
 
-			// 3. Set the projection to only include the rowid column.
+			// Set the projection to only include the rowid column.
 			get.projection_ids.clear();
 			get.projection_ids.push_back(rowid_pos);
 
 			// Re-resolve the get operator types after changing projection
 			get.ResolveOperatorTypes();
 
-			// 4. Insert a PDXearchIndexFilteredScan operator above the table scan.
+			// Insert a PDXearchIndexFilteredScan operator above the table scan.
 			auto pdxearch_index_filtered_scan = make_uniq<LogicalPDXearchIndexFilteredScan>(
 			    duck_table, bind_data->index, bind_data->limit, std::move(bind_data->query_embedding),
 			    std::move(output_column_ids), std::move(output_bindings));
@@ -819,23 +813,21 @@ public:
 			// Scenario 3: Filtered search where FILTER operators between the projection and the table scan hold (part
 			// of) the predicate, possibly mixed with projections that forward the table scan's columns. The table scan
 			// may have pushed-down filters as well.
-			// To support every case whose chain holds a FILTER or a join: the FILTER and join cases listed in
-			// IsChainOperator, including Subquery or view with a residual filter.
 
-			// 1. The PDXearchIndexFilteredScan emits the columns the projection reads (output_bindings), fetched by
-			//    rowid, so the operators above it keep working unchanged.
+			// The PDXearchIndexFilteredScan emits the columns the projection reads (output_bindings), fetched by
+			// rowid, so the operators above it keep working unchanged.
 
-			// 2. Make the rowid of every row that passes the predicate come out of the top of the chain.
+			// Make the rowid of every row that passes the predicate come out of the top of the chain.
 			const auto rowid_binding = PassRowIdThroughChain(get, chain, embedding_binding, embedding_column_position);
 
-			// 3. Keep only that rowid on top of the chain: the filtered search's sink takes a single rowid column.
+			// Keep only that rowid on top of the chain: the filtered search's sink takes a single rowid column.
 			vector<unique_ptr<Expression>> rowid_expressions;
 			rowid_expressions.push_back(make_uniq<BoundColumnRefExpression>(LogicalType::ROW_TYPE, rowid_binding));
 			auto rowid_projection =
 			    make_uniq<LogicalProjection>(input.optimizer.binder.GenerateTableIndex(), std::move(rowid_expressions));
 			rowid_projection->children.push_back(std::move(projection.children.front()));
 
-			// 4. Insert a PDXearchIndexFilteredScan operator above the rowid projection.
+			// Insert a PDXearchIndexFilteredScan operator above the rowid projection.
 			auto pdxearch_index_filtered_scan = make_uniq<LogicalPDXearchIndexFilteredScan>(
 			    duck_table, bind_data->index, bind_data->limit, std::move(bind_data->query_embedding),
 			    std::move(output_column_ids), std::move(output_bindings));
@@ -849,7 +841,7 @@ public:
 			projection.estimated_cardinality = top_n.estimated_cardinality;
 			projection.ResolveOperatorTypes();
 
-			// 5. Remove the TopN operator, unless it has an OFFSET to apply.
+			// Remove the TopN operator, unless it has an OFFSET to apply.
 			if (top_n.offset == 0) {
 				plan = std::move(top_n.children[0]);
 			}
