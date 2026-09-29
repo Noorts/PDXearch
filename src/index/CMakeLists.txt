@@ -7,6 +7,8 @@ set(EXTENSION_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/create/pdxearch_index_create.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/search/pdxearch_index_filtered_scan_logical.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/search/pdxearch_index_filtered_scan_physical.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/search/pdxearch_index_join_logical.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/search/pdxearch_index_join_physical.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/search/pdxearch_index_scan_logical.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/search/pdxearch_index_scan_physical.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/search/pdxearch_scan_optimizer.cpp

@@ -3,13 +3,20 @@
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/optimizer/optimizer_extension.hpp"
 #include "duckdb/optimizer/remove_unused_columns.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_window_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
+#include "duckdb/planner/operator/logical_cross_product.hpp"
+#include "duckdb/planner/operator/logical_delim_get.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_top_n.hpp"
+#include "duckdb/planner/operator/logical_window.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/storage/data_table.hpp"
 
@@ -19,6 +26,7 @@
 #include "index/pdxearch_module.hpp"
 #include "index/pdxearch_index.hpp"
 #include "index/search/pdxearch_index_filtered_scan_logical.hpp"
+#include "index/search/pdxearch_index_join_logical.hpp"
 #include "index/search/pdxearch_index_scan_logical.hpp"
 #include "index/search/pdxearch_index_scan_physical.hpp"
 
@@ -260,6 +268,53 @@ namespace duckdb {
  *                                      │      ~1,000,000 rows      │
  *                                      └───────────────────────────┘
  *
+ ************ SCENARIO 4 (multi-query search, LATERAL join): *******************
+ *
+ * Each row of another table supplies a query vector, and the table (possibly
+ * filtered, as in scenarios 1 to 3) is searched once per query.
+ *
+ * Example query (q has a qid and a query column):
+ *   SELECT q.qid, s.id FROM q, LATERAL (
+ *     SELECT id FROM table WHERE id > 50 ORDER BY array_distance(vec, q.query)
+ *     LIMIT 10) s;
+ *
+ * DuckDB decorrelates the subquery before any optimizer runs: the table is
+ * joined with the distinct query vectors (a DELIM_GET) by a cross product, and
+ * the ORDER BY ... LIMIT becomes a ROW_NUMBER window partitioned by the query
+ * vector with a FILTER on the row number. Its TopN window elimination then
+ * turns these into an AGGREGATE per query vector (with an OFFSET, the FILTER
+ * and the WINDOW stay). There is no TopN, and the DELIM_JOIN above joins the
+ * results back to q. The index join replaces only the cross product:
+ *
+ *                     IN                                         OUT
+ *   AGGREGATE [query |                          AGGREGATE [query |
+ *     arg_min_nulls_last(id, #1, 10)]             arg_min_nulls_last(id, #1, 10)]
+ *     PROJECTION [id,                             PROJECTION [id,
+ *       array_distance(vec, query), query]          array_distance(vec, query), query]
+ *       CROSS_PRODUCT                               PDXEARCH_INDEX_JOIN (K = 10)
+ *         SEQ_SCAN [table, Filters: id>50]            DELIM_GET [query]
+ *         DELIM_GET [query]                           SEQ_SCAN [table, Filters: id>50,
+ *                                                       Projections: rowid]
+ *
+ * For each query vector, the index join emits its K nearest rows of the table
+ * that pass the predicate, with the query row's columns: the cross product's
+ * columns, so the operators above keep working unchanged. The projection
+ * computes the distance of those rows, and the AGGREGATE (or the FILTER on the
+ * row number) picks each query's top K among them, which are all of them. Its
+ * groups are the query rows, so a group's top K is among the K nearest rows of
+ * its query rows. The DELIM_JOIN joins the query vectors back to the rows of q
+ * (INNER or LEFT). Without a predicate, the index join has no second child
+ * (scenario 1). Otherwise its second child emits the rowids of the passing
+ * rows, built as in scenarios 2 and 3, which it collects before the queries
+ * arrive. Projections of a view or subquery over the table, which forward its
+ * columns and the query vector, stay between the projection and the index join.
+ *
+ * K is at most STANDARD_VECTOR_SIZE (LIMIT + OFFSET), so a query's rows fill at
+ * most one output chunk. Descending orders, several ORDER BY keys, NULLS FIRST,
+ * predicates that read the query row (e.g. `WHERE table.cat = q.cat`), query
+ * vectors computed from the query row, and the same top K written without
+ * LATERAL (e.g. with QUALIFY) are not optimized.
+ *
  * TODO: Leave out the PROJECTION at the top? Our pattern recognition starts at
  * the TopN operator.
  * TODO: Fix cardinality of after-optimization plan (K instead of 1M?).
@@ -325,11 +380,13 @@ public:
 
 	// Collects the bindings the projection reads from its child, and the table scan's column each one traces to: an
 	// index scan replacing the projection's child emits those columns, fetched by rowid, under those bindings. False
-	// when the projection reads a value that the chain computes.
+	// when the projection reads a value that the chain computes. Bindings of `passed_through_table_index` are skipped:
+	// the operator replacing the child passes them through (the query rows of an index join).
 	// To support: Filtered subquery, Subquery or view with a residual filter, View or subquery without a predicate.
 	static bool TryCollectOutputColumns(LogicalProjection &projection, const vector<reference<LogicalOperator>> &chain,
 	                                    const LogicalGet &get, vector<ColumnBinding> &bindings,
-	                                    vector<ColumnIndex> &column_ids) {
+	                                    vector<ColumnIndex> &column_ids,
+	                                    const optional_idx passed_through_table_index = optional_idx()) {
 		bool all_traced = true;
 		for (auto &expression : projection.expressions) {
 			ExpressionIterator::EnumerateExpression(expression, [&](Expression &child) {
@@ -338,6 +395,10 @@ public:
 				}
 				const auto binding = child.Cast<BoundColumnRefExpression>().binding;
 				if (std::find(bindings.begin(), bindings.end(), binding) != bindings.end()) {
+					return;
+				}
+				if (passed_through_table_index.IsValid() &&
+				    binding.table_index == passed_through_table_index.GetIndex()) {
 					return;
 				}
 				auto traced_binding = binding;
@@ -550,6 +611,30 @@ public:
 			return nullptr;
 		}
 		return get_ptr_ptr;
+	}
+
+	// Walks the projections that only forward columns (plain column references) from `top` down to the cross product
+	// below them. They come from a view or subquery over the table in a LATERAL join: DuckDB adds the query rows'
+	// columns to its projection. `forwarding_projections` receives them from the top down. Returns the cross product's
+	// slot, or nullptr when the walk ends in another operator.
+	static unique_ptr<LogicalOperator> *
+	TryWalkToCrossProduct(unique_ptr<LogicalOperator> &top,
+	                      vector<reference<LogicalOperator>> &forwarding_projections) {
+		const auto only_forwards = [](const LogicalOperator &op) {
+			return op.type == LogicalOperatorType::LOGICAL_PROJECTION && op.children.size() == 1 &&
+			       std::all_of(op.expressions.begin(), op.expressions.end(), [](const unique_ptr<Expression> &expr) {
+				       return expr->type == ExpressionType::BOUND_COLUMN_REF;
+			       });
+		};
+		auto *cross_product_ptr_ptr = &top;
+		while (only_forwards(**cross_product_ptr_ptr)) {
+			forwarding_projections.push_back(**cross_product_ptr_ptr);
+			cross_product_ptr_ptr = &(*cross_product_ptr_ptr)->children.front();
+		}
+		if ((*cross_product_ptr_ptr)->type != LogicalOperatorType::LOGICAL_CROSS_PRODUCT) {
+			return nullptr;
+		}
+		return cross_product_ptr_ptr;
 	}
 
 	// A distance function matched to an index of the scanned table.
@@ -890,8 +975,280 @@ public:
 		}
 	}
 
+	// Finds the top K per query of a LATERAL join (scenario 4). DuckDB turns the `ORDER BY distance LIMIT K` of the
+	// subquery into a ROW_NUMBER window partitioned by the query row, and a FILTER on the row number. Its TopN window
+	// elimination then makes an AGGREGATE of them, grouped by the query row: `arg_min(payload, distance, K)` (or
+	// `min(distance, K)` without payload; K is left out when it is 1). With an OFFSET, the FILTER and the WINDOW stay.
+	// Returns the top K's child, and fills in K, the key's binding in that child, and the groups (or partitions).
+	static optional_ptr<LogicalOperator> TryMatchPerQueryTopK(LogicalOperator &op, idx_t &limit,
+	                                                          ColumnBinding &key_binding,
+	                                                          vector<reference<Expression>> &groups) {
+		if (op.type == LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY) {
+			auto &aggregate = op.Cast<LogicalAggregate>();
+			if (aggregate.children.size() != 1 || aggregate.expressions.size() != 1 ||
+			    aggregate.grouping_sets.size() > 1 || !aggregate.grouping_functions.empty() ||
+			    aggregate.expressions[0]->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+				return nullptr;
+			}
+			auto &function = aggregate.expressions[0]->Cast<BoundAggregateExpression>();
+			if (function.IsDistinct() || function.filter ||
+			    (function.order_bys && !function.order_bys->orders.empty())) {
+				return nullptr;
+			}
+			// arg_min(payload, key[, K]) or min(key[, K]). The descending order becomes arg_max or max.
+			idx_t key_position;
+			if (function.function.name == "arg_min" || function.function.name == "arg_min_nulls_last") {
+				key_position = 1;
+			} else if (function.function.name == "min") {
+				key_position = 0;
+			} else {
+				return nullptr;
+			}
+			if (function.children.size() != key_position + 1 && function.children.size() != key_position + 2) {
+				return nullptr;
+			}
+			auto &key = *function.children[key_position];
+			if (key.type != ExpressionType::BOUND_COLUMN_REF) {
+				return nullptr;
+			}
+			limit = 1;
+			if (function.children.size() == key_position + 2) {
+				auto &k = *function.children[key_position + 1];
+				if (k.type != ExpressionType::VALUE_CONSTANT) {
+					return nullptr;
+				}
+				auto &k_value = k.Cast<BoundConstantExpression>().value;
+				if (k_value.IsNull() || k_value.type().id() != LogicalTypeId::BIGINT ||
+				    k_value.GetValue<int64_t>() <= 0) {
+					return nullptr;
+				}
+				limit = static_cast<idx_t>(k_value.GetValue<int64_t>());
+			}
+			key_binding = key.Cast<BoundColumnRefExpression>().binding;
+			for (auto &group : aggregate.groups) {
+				groups.push_back(*group);
+			}
+			return aggregate.children[0].get();
+		}
+
+		if (op.type != LogicalOperatorType::LOGICAL_FILTER || op.children.size() != 1) {
+			return nullptr;
+		}
+		// Projections and FILTERs may sit between the FILTER and the WINDOW (e.g. DuckDB's debug verification
+		// projections).
+		vector<reference<LogicalOperator>> path;
+		reference<LogicalOperator> child = *op.children[0];
+		while ((child.get().type == LogicalOperatorType::LOGICAL_PROJECTION ||
+		        child.get().type == LogicalOperatorType::LOGICAL_FILTER) &&
+		       child.get().children.size() == 1) {
+			path.push_back(child);
+			child = *child.get().children[0];
+		}
+		if (child.get().type != LogicalOperatorType::LOGICAL_WINDOW || child.get().children.size() != 1) {
+			return nullptr;
+		}
+		auto &window = child.get().Cast<LogicalWindow>();
+		if (window.expressions.size() != 1 || window.expressions[0]->type != ExpressionType::WINDOW_ROW_NUMBER) {
+			return nullptr;
+		}
+		auto &row_number = window.expressions[0]->Cast<BoundWindowExpression>();
+		if (row_number.orders.size() != 1 || !row_number.arg_orders.empty() || row_number.filter_expr ||
+		    row_number.distinct) {
+			return nullptr;
+		}
+		auto &order = row_number.orders[0];
+		if (order.type != OrderType::ASCENDING || order.null_order != OrderByNullType::NULLS_LAST ||
+		    order.expression->type != ExpressionType::BOUND_COLUMN_REF) {
+			return nullptr;
+		}
+		// K is the smallest bound on the row number (`rownum <= K`, `rownum < K + 1` or `rownum = K`). The K nearest
+		// rows of each query get the row numbers 1 to K they get among all rows, so the FILTER's other conditions
+		// (e.g. the OFFSET's `rownum > o`) stay as they are.
+		const ColumnBinding row_number_binding(window.window_index, 0);
+		optional_idx smallest_bound;
+		for (auto &condition : op.expressions) {
+			if (condition->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+				continue;
+			}
+			auto &comparison = condition->Cast<BoundComparisonExpression>();
+			if (comparison.left->type != ExpressionType::BOUND_COLUMN_REF ||
+			    comparison.right->type != ExpressionType::VALUE_CONSTANT) {
+				continue;
+			}
+			auto binding = comparison.left->Cast<BoundColumnRefExpression>().binding;
+			auto &bound_value = comparison.right->Cast<BoundConstantExpression>().value;
+			if (!TryTraceToTableScan(path, binding) || binding != row_number_binding || bound_value.IsNull() ||
+			    bound_value.type().id() != LogicalTypeId::BIGINT) {
+				continue;
+			}
+			auto bound = bound_value.GetValue<int64_t>();
+			if (comparison.type == ExpressionType::COMPARE_LESSTHAN) {
+				bound -= 1;
+			} else if (comparison.type != ExpressionType::COMPARE_LESSTHANOREQUALTO &&
+			           comparison.type != ExpressionType::COMPARE_EQUAL) {
+				continue;
+			}
+			if (bound <= 0) {
+				return nullptr;
+			}
+			if (!smallest_bound.IsValid() || static_cast<idx_t>(bound) < smallest_bound.GetIndex()) {
+				smallest_bound = static_cast<idx_t>(bound);
+			}
+		}
+		if (!smallest_bound.IsValid()) {
+			return nullptr;
+		}
+		limit = smallest_bound.GetIndex();
+		key_binding = order.expression->Cast<BoundColumnRefExpression>().binding;
+		for (auto &partition : row_number.partitions) {
+			groups.push_back(*partition);
+		}
+		return window.children[0].get();
+	}
+
+	// Whether every group (or partition) of the top K is a column of the query rows, traced through the projections
+	// from the top K's child down to the distance projection, and the forwarding projections below it. A group then
+	// holds whole query rows, and its top K is among the K nearest rows of those query rows, which the index join
+	// emits.
+	static bool GroupsAreQueryRowColumns(const vector<reference<Expression>> &groups, LogicalOperator &top_k_child,
+	                                     const LogicalProjection &distance_projection,
+	                                     const vector<reference<LogicalOperator>> &forwarding_projections,
+	                                     const idx_t query_rows_table_index) {
+		vector<reference<LogicalOperator>> path;
+		for (reference<LogicalOperator> op = top_k_child;; op = *op.get().children[0]) {
+			path.push_back(op);
+			if (&op.get() == &distance_projection) {
+				break;
+			}
+		}
+		path.insert(path.end(), forwarding_projections.begin(), forwarding_projections.end());
+		for (auto &group : groups) {
+			if (group.get().type != ExpressionType::BOUND_COLUMN_REF) {
+				return false;
+			}
+			auto binding = group.get().Cast<BoundColumnRefExpression>().binding;
+			if (!TryTraceToTableScan(path, binding) || binding.table_index != query_rows_table_index) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// Scenario 4: a LATERAL join searching the table once per query row. Replaces the cross product between the table
+	// and the query rows, below the projection that computes the distance, with a PDXearchIndexJoin.
+	static bool TryOptimizeIndexJoin(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
+		idx_t limit = 0;
+		ColumnBinding key_binding;
+		vector<reference<Expression>> groups;
+		auto top_k_child = TryMatchPerQueryTopK(*plan, limit, key_binding, groups);
+		// A query's K nearest rows are emitted as one chunk.
+		if (!top_k_child || limit > STANDARD_VECTOR_SIZE) {
+			return false;
+		}
+
+		auto distance_projection = TryFindDistanceProjection(*top_k_child, key_binding);
+		if (!distance_projection) {
+			return false;
+		}
+		auto &projection = *distance_projection;
+		if (projection.children.size() != 1) {
+			return false;
+		}
+		vector<reference<LogicalOperator>> forwarding_projections; // Between the projection and the cross product.
+		auto *cross_product_ptr_ptr = TryWalkToCrossProduct(projection.children.front(), forwarding_projections);
+		if (!cross_product_ptr_ptr) {
+			return false;
+		}
+		auto &cross_product_ptr = *cross_product_ptr_ptr;
+		auto &cross_product = *cross_product_ptr;
+		// The projection that reads the cross product's columns, which the index join emits.
+		auto &cross_product_reader =
+		    forwarding_projections.empty() ? projection : forwarding_projections.back().get().Cast<LogicalProjection>();
+
+		// One side of the cross product holds the query rows: the DELIM_GET of the LATERAL join, which DuckDB fills
+		// with the distinct query rows. The other side is the table, possibly below a chain (the subquery's predicate).
+		idx_t query_rows_side;
+		if (cross_product.children[0]->type == LogicalOperatorType::LOGICAL_DELIM_GET) {
+			query_rows_side = 0;
+		} else if (cross_product.children[1]->type == LogicalOperatorType::LOGICAL_DELIM_GET) {
+			query_rows_side = 1;
+		} else {
+			return false;
+		}
+		const auto query_rows_table_index =
+		    cross_product.children[query_rows_side]->Cast<LogicalDelimGet>().table_index;
+		auto &table_side = cross_product.children[1 - query_rows_side];
+
+		vector<reference<LogicalOperator>> chain; // From the table side's top down to the table scan (excluded).
+		bool chain_filters_rows = false;
+		auto *get_ptr_ptr = TryWalkChainToTableScan(table_side, chain, chain_filters_rows);
+		if (!get_ptr_ptr) {
+			return false;
+		}
+		auto &get = (*get_ptr_ptr)->Cast<LogicalGet>();
+		auto &duck_table = get.GetTable()->Cast<DuckTableEntry>();
+
+		// The distance is between our index expression and a column of the query rows, which its arguments read
+		// through the forwarding projections (and the index expression then through the table side's chain).
+		vector<reference<LogicalOperator>> distance_chain = forwarding_projections;
+		distance_chain.insert(distance_chain.end(), chain.begin(), chain.end());
+		IndexMatch match;
+		const auto is_query_column = [&](const Expression &argument) {
+			if (argument.type != ExpressionType::BOUND_COLUMN_REF) {
+				return false;
+			}
+			auto binding = argument.Cast<BoundColumnRefExpression>().binding;
+			return TryTraceToTableScan(forwarding_projections, binding) &&
+			       binding.table_index == query_rows_table_index;
+		};
+		if (!TryMatchIndex(input.context, get, distance_chain, projection.expressions[key_binding.column_index],
+		                   is_query_column, match)) {
+			return false;
+		}
+		// The query vector's and the embedding's bindings among the cross product's columns.
+		auto query_binding = match.query_argument->Cast<BoundColumnRefExpression>().binding;
+		TryTraceToTableScan(forwarding_projections, query_binding);
+		if (match.embedding_column_position.IsValid()) {
+			TryTraceToTableScan(forwarding_projections, match.embedding_binding);
+		}
+
+		if (!GroupsAreQueryRowColumns(groups, *top_k_child, projection, forwarding_projections,
+		                              query_rows_table_index)) {
+			return false;
+		}
+
+		// The table columns the index join fetches: those the projection above the cross product reads. The query rows'
+		// columns pass through.
+		vector<ColumnBinding> output_bindings;
+		vector<ColumnIndex> output_column_ids;
+		if (!TryCollectOutputColumns(cross_product_reader, chain, get, output_bindings, output_column_ids,
+		                             query_rows_table_index)) {
+			return false;
+		}
+
+		DetachDynamicFilters(get, chain);
+		const bool is_filtered = chain_filters_rows || !get.table_filters.filters.empty();
+
+		auto index_join = make_uniq<LogicalPDXearchIndexJoin>(duck_table, *match.index, limit, query_binding,
+		                                                      std::move(output_column_ids), std::move(output_bindings));
+		const auto num_query_rows = cross_product.children[query_rows_side]->EstimateCardinality(input.context);
+		index_join->children.push_back(std::move(cross_product.children[query_rows_side]));
+		if (is_filtered) {
+			// The rowids of the rows that pass the predicate, as the filtered search consumes them (scenarios 2, 3).
+			ColumnBinding rowid_binding;
+			index_join->children.push_back(
+			    BuildRowIdChild(input, table_side, *get_ptr_ptr, chain, chain_filters_rows, match, rowid_binding));
+		}
+		index_join->ResolveOperatorTypes();
+		index_join->SetEstimatedCardinality(num_query_rows * limit);
+
+		// Replaces the cross product (and, without a predicate, the table scan).
+		cross_product_ptr = std::move(index_join);
+		return true;
+	}
+
 	static bool OptimizeChildren(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
-		auto ok = TryOptimize(input, plan);
+		auto ok = TryOptimize(input, plan) || TryOptimizeIndexJoin(input, plan);
 		// Recursively optimize the children
 		for (auto &child : plan->children) {
 			ok |= OptimizeChildren(input, child);
