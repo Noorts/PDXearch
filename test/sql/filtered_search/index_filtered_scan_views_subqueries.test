@@ -1,0 +1,268 @@
+# name: test/sql/filtered_search/index_filtered_scan_views_subqueries.test
+# description: Searches over subqueries and views of the indexed table use the index scans: projections that only
+#              forward the table's columns (DuckDB binds a view as a subquery) sit between the distance projection and
+#              the table scan, and the results equal the brute-force search.
+# group: [filtered_search]
+
+require parquet
+
+require pdxearch
+
+# Row groups of 8192 rows (4 in the table), so selective filters glue the rows of several row groups into one chunk.
+statement ok
+ATTACH '__TEST_DIR__/views_subqueries.db' AS views_subqueries (ROW_GROUP_SIZE 8192);
+
+statement ok
+USE views_subqueries;
+
+statement ok
+SET late_materialization_max_rows = 0;
+
+statement ok
+SET checkpoint_threshold = '10GB';
+
+# Variables
+test-env DIMS 128
+
+test-env QUERY_EMB [0,16,35,5,32,31,14,10,11,78,55,10,45,83,11,6,14,57,102,75,20,8,3,5,67,17,19,26,5,0,1,22,60,26,7,1,18,22,84,53,85,119,119,4,24,18,7,7,1,81,106,102,72,30,6,0,9,1,9,119,72,1,4,33,119,29,6,1,0,1,14,52,119,30,3,0,0,55,92,111,2,5,4,9,22,89,96,14,1,0,1,82,59,16,20,5,25,14,11,4,0,0,1,26,47,23,4,0,0,4,38,83,30,14,9,4,9,17,23,41,0,0,2,8,19,25,23,1]
+
+# t is indexed; t_bf is an unindexed copy whose searches give the brute-force result. Each has the same two views.
+statement ok
+CREATE TABLE t AS SELECT id, (id % 10)::INTEGER AS cat, 'n' || (id % 100) AS name, emb::FLOAT[${DIMS}] AS emb FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') WHERE id < 32768;
+
+statement ok
+CREATE TABLE t_bf AS FROM t;
+
+statement ok
+CREATE INDEX t_idx ON t USING PDXEARCH (emb) WITH (metric = 'l2sq', quantization = 'f32', n_probe = 0, seed = 0);
+
+statement ok
+CREATE VIEW v_all AS SELECT * FROM t;
+
+statement ok
+CREATE VIEW v_all_bf AS SELECT * FROM t_bf;
+
+statement ok
+CREATE VIEW v_filtered AS SELECT * FROM t WHERE id % 2 = 0 OR cat = 1;
+
+statement ok
+CREATE VIEW v_filtered_bf AS SELECT * FROM t_bf WHERE id % 2 = 0 OR cat = 1;
+
+foreach threads 1 4
+
+statement ok
+SET threads = ${threads};
+
+# ============================================
+# Subquery with a filter DuckDB pushes into the scan: the forwarding projection is dropped.
+# ============================================
+
+query II
+EXPLAIN SELECT id FROM (SELECT * FROM t WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*SEQ_SCAN.*Filters.*
+
+query I nosort pushed_filter_subquery
+SELECT id FROM (SELECT * FROM t WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort pushed_filter_subquery
+SELECT id FROM (SELECT * FROM t_bf WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+# ============================================
+# Subqueries with a residual filter: the projections stay below the search and forward the rowid. The scan does not
+# read the embedding.
+# ============================================
+
+query II
+EXPLAIN SELECT id FROM (SELECT * FROM t WHERE id > 50 OR cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*
+
+query II
+EXPLAIN SELECT id FROM (SELECT * FROM t WHERE id > 50 OR cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<!REGEX>:.*SEQ_SCAN.*emb.*
+
+query I nosort residual_filter_subquery_k10
+SELECT id FROM (SELECT * FROM t WHERE id > 50 OR cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort residual_filter_subquery_k10
+SELECT id FROM (SELECT * FROM t_bf WHERE id > 50 OR cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort residual_filter_subquery_k100
+SELECT id FROM (SELECT * FROM t WHERE id > 50 OR cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 100;
+----
+
+query I nosort residual_filter_subquery_k100
+SELECT id FROM (SELECT * FROM t_bf WHERE id > 50 OR cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 100;
+----
+
+query I nosort nested_subqueries
+SELECT id FROM (SELECT * FROM (SELECT id, cat, emb FROM t WHERE id > 50 OR cat = 3) a WHERE a.cat <> 4) b ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort nested_subqueries
+SELECT id FROM (SELECT * FROM (SELECT id, cat, emb FROM t_bf WHERE id > 50 OR cat = 3) a WHERE a.cat <> 4) b ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+# The embedding under another name.
+query II
+EXPLAIN SELECT id FROM (SELECT id, cat, emb AS e FROM t WHERE id > 50 OR cat = 3) s ORDER BY array_distance(e, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*
+
+query I nosort renamed_embedding
+SELECT id FROM (SELECT id, cat, emb AS e FROM t WHERE id > 50 OR cat = 3) s ORDER BY array_distance(e, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort renamed_embedding
+SELECT id FROM (SELECT id, cat, emb AS e FROM t_bf WHERE id > 50 OR cat = 3) s ORDER BY array_distance(e, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+# A predicate of the subquery reads the embedding: the scan keeps it and emits the rowid as well.
+query I nosort subquery_filter_on_embedding
+SELECT id FROM (SELECT id, cat, emb FROM t WHERE emb[1] > 10 OR cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort subquery_filter_on_embedding
+SELECT id FROM (SELECT id, cat, emb FROM t_bf WHERE emb[1] > 10 OR cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+# ============================================
+# Views: a view without a filter uses the unfiltered index scan, a filter of the view or on the view the filtered one.
+# ============================================
+
+query II
+EXPLAIN SELECT id FROM v_all ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_SCAN.*
+
+query I nosort view_without_filter
+SELECT id FROM v_all ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort view_without_filter
+SELECT id FROM v_all_bf ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query II
+EXPLAIN SELECT id FROM v_filtered ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*
+
+query I nosort view_with_filter
+SELECT id FROM v_filtered ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort view_with_filter
+SELECT id FROM v_filtered_bf ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort filter_on_view
+SELECT id FROM v_filtered WHERE cat = 1 OR id < 10 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort filter_on_view
+SELECT id FROM v_filtered_bf WHERE cat = 1 OR id < 10 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query IIII nosort view_star
+SELECT * FROM v_filtered ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 5;
+----
+
+query IIII nosort view_star
+SELECT * FROM v_filtered_bf ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 5;
+----
+
+# ============================================
+# The distance computed in a subquery and ordered by its alias outside: the projection reading it stays above.
+# ============================================
+
+query II
+EXPLAIN SELECT id, d FROM (SELECT id, array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) AS d FROM t WHERE id > 50 OR cat = 3) s ORDER BY d LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*
+
+query II nosort aliased_distance
+SELECT id, d FROM (SELECT id, array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) AS d FROM t WHERE id > 50 OR cat = 3) s ORDER BY d LIMIT 10;
+----
+
+query II nosort aliased_distance
+SELECT id, d FROM (SELECT id, array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) AS d FROM t_bf WHERE id > 50 OR cat = 3) s ORDER BY d LIMIT 10;
+----
+
+query II
+EXPLAIN SELECT id, d FROM (SELECT id, array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) AS d FROM t WHERE id > 50 OR cat = 3) s ORDER BY d LIMIT 10 OFFSET 3;
+----
+physical_plan	<REGEX>:.*TOP_N.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*
+
+query II nosort aliased_distance_offset
+SELECT id, d FROM (SELECT id, array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) AS d FROM t WHERE id > 50 OR cat = 3) s ORDER BY d LIMIT 10 OFFSET 3;
+----
+
+query II nosort aliased_distance_offset
+SELECT id, d FROM (SELECT id, array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) AS d FROM t_bf WHERE id > 50 OR cat = 3) s ORDER BY d LIMIT 10 OFFSET 3;
+----
+
+# ============================================
+# Computed columns of a subquery: fine while the query does not read them; reading one keeps the brute-force plan.
+# ============================================
+
+query II
+EXPLAIN SELECT id FROM (SELECT id, id * 2 AS x, emb FROM t WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*
+
+query I nosort unread_computed_column
+SELECT id FROM (SELECT id, id * 2 AS x, emb FROM t WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort unread_computed_column
+SELECT id FROM (SELECT id, id * 2 AS x, emb FROM t_bf WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query II
+EXPLAIN SELECT x FROM (SELECT id, id * 2 AS x, emb FROM t WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<!REGEX>:.*PDXEARCH.*
+
+query I nosort read_computed_column
+SELECT x FROM (SELECT id, id * 2 AS x, emb FROM t WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort read_computed_column
+SELECT x FROM (SELECT id, id * 2 AS x, emb FROM t_bf WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+# ============================================
+# DuckDB's default late materialization setting.
+# ============================================
+
+statement ok
+RESET late_materialization_max_rows;
+
+query II
+EXPLAIN SELECT id FROM (SELECT * FROM t WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*
+
+query I nosort pushed_filter_subquery
+SELECT id FROM (SELECT * FROM t WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort residual_filter_subquery_k10
+SELECT id FROM (SELECT * FROM t WHERE id > 50 OR cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+query I nosort view_with_filter
+SELECT id FROM v_filtered ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+
+statement ok
+SET late_materialization_max_rows = 0;
+
+endloop

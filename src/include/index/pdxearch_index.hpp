@@ -113,6 +113,9 @@ public:
 	// Position of the index's row group that holds row_id (the row_group_idx of the methods below).
 	optional_idx LookupRowGroup(row_t row_id) const;
 
+	// The row ids the index's row group at row_group_idx covers.
+	PDXearchRowRange GetRowGroupRange(idx_t row_group_idx) const;
+
 	void SetUpIndexForRowGroup(const row_t *row_ids, const float *embeddings, idx_t num_embeddings, row_t row_start,
 	                           idx_t count);
 

@@ -100,6 +100,8 @@ public:
 
 	// Temporary row group staging area.
 	idx_t current_row_group_id {0};
+	// The row ids covered by the row group at current_row_group_id. Empty until the first row arrives.
+	PDXearchRowRange current_row_group_range {0, 0};
 	// The row ids of the current row group that passed the predicate and were thus emitted by the child operator (e.g.,
 	// sequential scan operator). size_t because they are handed to PDX as-is.
 	std::vector<size_t> current_row_group_passing_rowids;
@@ -114,6 +116,9 @@ unique_ptr<LocalSinkState> PhysicalPDXearchIndexFilteredScan::GetLocalSinkState(
 
 // Starts the filtered search of the row group staged in the local state, with the row ids that passed the SQL
 // predicate, and runs its first iteration: the n_probe nearest clusters that hold passing tuples.
+// TODO: Rank a row group's clusters for the query once and share that access order between all searches of the row
+// group (PDX's InitializeSearchCursor accepts a preset order). Each search ranks them again, which repeats work when a
+// row group gets several searches: under verify_parallelism today, and for rows arriving out of order later.
 static void BeginSearchForStagedRowGroup(PDXearchIndex &index, PhysicalFilteredScanGlobalSinkState &g_sink,
                                          PhysicalFilteredScanLocalSinkState &l_sink) {
 	auto search_cursor =
@@ -139,26 +144,35 @@ SinkResultType PhysicalPDXearchIndexFilteredScan::Sink(ExecutionContext &context
 
 	input_chunk.data[0].Flatten(input_chunk.size());
 	const auto input_chunk_row_ids = FlatVector::GetData<row_t>(input_chunk.data[0]);
-	// A chunk never spans two DuckDB row groups, so the first row id tells which one this chunk belongs to.
-	const auto row_group_idx = index.LookupRowGroup(input_chunk_row_ids[0]);
-	if (!row_group_idx.IsValid()) {
-		// A DuckDB row group without indexed rows (all its embeddings are NULL) has no index row group.
-		return SinkResultType::NEED_MORE_INPUT;
-	}
-	const idx_t row_group_id = row_group_idx.GetIndex();
-	D_ASSERT(l_sink.current_row_group_id <= row_group_id);
-
-	// If we encounter a new row group, then start the filtered search of the previous row group.
-	if (row_group_id > l_sink.current_row_group_id && !l_sink.current_row_group_passing_rowids.empty()) {
-		BeginSearchForStagedRowGroup(index, g_sink, l_sink);
-		// Clear the local state to process the next row group.
-		l_sink.current_row_group_passing_rowids.clear();
-	}
-	l_sink.current_row_group_id = row_group_id;
-
-	// Collect row ids of the current row group into the local state.
+	// A table scan morsel is one whole DuckDB row group, and each thread receives its morsels in increasing order, so
+	// a row group reaches this sink as one run of rows on one thread (the debug setting verify_parallelism hands out
+	// single vectors instead, which splits a row group over threads, each searching its own part). Caching operators
+	// between the scan and this sink (e.g. a FILTER) hold back outputs of up to 64 rows and append the thread's next
+	// outputs to them, which can come from its next morsel, so one chunk can hold the end of one run and the start of
+	// the next. The row group is looked up again whenever a row id leaves the current one, and a run's search starts
+	// when the run ends.
 	for (idx_t i = 0; i < input_chunk.size(); i++) {
-		l_sink.current_row_group_passing_rowids.push_back(static_cast<size_t>(input_chunk_row_ids[i]));
+		const row_t row_id = input_chunk_row_ids[i];
+		if (row_id < l_sink.current_row_group_range.start || row_id >= l_sink.current_row_group_range.end) {
+			const auto row_group_idx = index.LookupRowGroup(row_id);
+			if (!row_group_idx.IsValid()) {
+				// Rows without an embedding are not in the index.
+				continue;
+			}
+			// Runs arrive in increasing row group order, except the rows a hash join below this search spills to disk:
+			// the join replays them after the scan, one hash partition at a time, so rows of a row group whose search
+			// already started can arrive again. They get a search of their own; the searches cover disjoint rows and
+			// feed the same heap.
+			// TODO: Gather out-of-order rows per row group and search each row group once.
+			// The run of the current row group ended: start its filtered search.
+			if (!l_sink.current_row_group_passing_rowids.empty()) {
+				BeginSearchForStagedRowGroup(index, g_sink, l_sink);
+				l_sink.current_row_group_passing_rowids.clear();
+			}
+			l_sink.current_row_group_id = row_group_idx.GetIndex();
+			l_sink.current_row_group_range = index.GetRowGroupRange(l_sink.current_row_group_id);
+		}
+		l_sink.current_row_group_passing_rowids.push_back(static_cast<size_t>(row_id));
 	}
 	D_ASSERT(l_sink.current_row_group_passing_rowids.size() <= index.GetRowGroupSize());
 

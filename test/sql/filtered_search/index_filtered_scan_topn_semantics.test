@@ -1,0 +1,134 @@
+# name: test/sql/filtered_search/index_filtered_scan_topn_semantics.test
+# description: The index scans keep the semantics of the TopN they replace: an OFFSET skips the nearest rows exactly
+#              like the brute-force search, and an order that puts NULL distances first (NULLS FIRST, or
+#              default_null_order) is not rewritten, since rows without an embedding are not in the index.
+# group: [filtered_search]
+
+require parquet
+
+require pdxearch
+
+statement ok
+SET late_materialization_max_rows = 0;
+
+# Variables
+test-env DIMS 128
+
+test-env QUERY_EMB [0,16,35,5,32,31,14,10,11,78,55,10,45,83,11,6,14,57,102,75,20,8,3,5,67,17,19,26,5,0,1,22,60,26,7,1,18,22,84,53,85,119,119,4,24,18,7,7,1,81,106,102,72,30,6,0,9,1,9,119,72,1,4,33,119,29,6,1,0,1,14,52,119,30,3,0,0,55,92,111,2,5,4,9,22,89,96,14,1,0,1,82,59,16,20,5,25,14,11,4,0,0,1,26,47,23,4,0,0,4,38,83,30,14,9,4,9,17,23,41,0,0,2,8,19,25,23,1]
+
+# t1 is indexed; t1_bf is an unindexed copy whose searches give the brute-force result. Rows -1 and -2 have no
+# embedding.
+statement ok
+CREATE TABLE t1 AS SELECT id, emb::FLOAT[${DIMS}] AS emb FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') WHERE id < 20000;
+
+statement ok
+INSERT INTO t1 VALUES (-1, NULL), (-2, NULL);
+
+statement ok
+CREATE TABLE t1_bf AS FROM t1;
+
+statement ok
+CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (metric = 'l2sq', quantization = 'f32', n_probe = 0, seed = 0);
+
+# ============================================
+# OFFSET: the index searches LIMIT + OFFSET neighbours and the TopN stays to skip the first OFFSET of them.
+# ============================================
+
+# Without an OFFSET the TopN is replaced entirely.
+query II
+EXPLAIN SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<!REGEX>:.*TOP_N.*
+
+query II
+EXPLAIN SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10 OFFSET 5;
+----
+physical_plan	<REGEX>:.*TOP_N.*PDXEARCH_INDEX_SCAN.*
+
+query I nosort offset_unfiltered
+SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10 OFFSET 5;
+----
+
+query I nosort offset_unfiltered
+SELECT id FROM t1_bf ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10 OFFSET 5;
+----
+
+query II
+EXPLAIN SELECT id FROM t1 WHERE id % 3 = 0 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10 OFFSET 20;
+----
+physical_plan	<REGEX>:.*TOP_N.*PDXEARCH_INDEX_FILT_SCAN.*
+
+query I nosort offset_filtered
+SELECT id FROM t1 WHERE id % 3 = 0 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10 OFFSET 20;
+----
+
+query I nosort offset_filtered
+SELECT id FROM t1_bf WHERE id % 3 = 0 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10 OFFSET 20;
+----
+
+# 12 rows pass the filter: LIMIT 5 OFFSET 8 returns the 9th to the 12th nearest, OFFSET 20 returns nothing.
+query I nosort offset_past_passing_rows
+SELECT id FROM t1 WHERE id BETWEEN 0 AND 11 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 5 OFFSET 8;
+----
+
+query I nosort offset_past_passing_rows
+SELECT id FROM t1_bf WHERE id BETWEEN 0 AND 11 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 5 OFFSET 8;
+----
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM t1 WHERE id BETWEEN 0 AND 11 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 5 OFFSET 8);
+----
+4
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM t1 WHERE id BETWEEN 0 AND 11 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 5 OFFSET 20);
+----
+0
+
+# ============================================
+# NULLS FIRST: rows without an embedding must come first, and the index does not hold them, so the plan stays brute
+# force.
+# ============================================
+
+query II
+EXPLAIN SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) NULLS FIRST LIMIT 5;
+----
+physical_plan	<!REGEX>:.*PDXEARCH.*
+
+query I
+SELECT COUNT(*) FILTER (WHERE id < 0) FROM (SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) NULLS FIRST LIMIT 5);
+----
+2
+
+query II
+EXPLAIN SELECT id FROM t1 WHERE id % 3 = 0 OR id < 0 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) NULLS FIRST LIMIT 5;
+----
+physical_plan	<!REGEX>:.*PDXEARCH.*
+
+# The default null order is resolved while binding, so changing it has the same effect on a plain ORDER BY.
+statement ok
+SET default_null_order = 'nulls_first';
+
+query II
+EXPLAIN SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 5;
+----
+physical_plan	<!REGEX>:.*PDXEARCH.*
+
+query I
+SELECT COUNT(*) FILTER (WHERE id < 0) FROM (SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 5);
+----
+2
+
+statement ok
+RESET default_null_order;
+
+query II
+EXPLAIN SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 5;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_SCAN.*
+
+# An explicit NULLS LAST is the default order and keeps using the index.
+query II
+EXPLAIN SELECT id FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) NULLS LAST LIMIT 5;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_SCAN.*

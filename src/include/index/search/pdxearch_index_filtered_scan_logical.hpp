@@ -11,13 +11,15 @@ class LogicalPDXearchIndexFilteredScan : public LogicalExtensionOperator {
 public:
 	LogicalPDXearchIndexFilteredScan(DuckTableEntry &table, Index &index, idx_t limit,
 	                                 unsafe_unique_array<float> query_vector, vector<ColumnIndex> column_ids,
-	                                 idx_t table_index)
-	    : LogicalExtensionOperator(), column_ids(std::move(column_ids)), table_index(table_index), table(table),
-	      index(index), limit(limit), query_embedding(std::move(query_vector)) {
+	                                 vector<ColumnBinding> column_bindings)
+	    : LogicalExtensionOperator(), column_ids(std::move(column_ids)), column_bindings(std::move(column_bindings)),
+	      table(table), index(index), limit(limit), query_embedding(std::move(query_vector)) {
 	}
 
+	// The table columns fetched by rowid for the results, and the bindings they are emitted under: those the operator
+	// above reads.
 	vector<ColumnIndex> column_ids;
-	idx_t table_index;
+	vector<ColumnBinding> column_bindings;
 
 	DuckTableEntry &table;
 	Index &index;

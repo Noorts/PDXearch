@@ -140,6 +140,15 @@ optional_idx PDXearchIndex::LookupRowGroup(const row_t row_id) const {
 	return static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())->LookupRowGroup(row_id);
 }
 
+PDXearchRowRange PDXearchIndex::GetRowGroupRange(const idx_t row_group_idx) const {
+	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
+		const auto &row_group = static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())->GetRowGroup(row_group_idx);
+		return {row_group.row_start, row_group.row_end};
+	}
+	const auto &row_group = static_cast<PDXearchWrapperF32 *>(pdxearch_wrapper.get())->GetRowGroup(row_group_idx);
+	return {row_group.row_start, row_group.row_end};
+}
+
 void PDXearchIndex::AppendRow(const idx_t row_group_idx, const row_t row_id, const float *const transformed_embedding) {
 	if (pdxearch_wrapper->GetQuantization() == PDX::U8) {
 		static_cast<PDXearchWrapperU8 *>(pdxearch_wrapper.get())
