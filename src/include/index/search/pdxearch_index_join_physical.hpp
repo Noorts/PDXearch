@@ -22,7 +22,7 @@ public:
 
 	DuckTableEntry &table;
 	Index &index;
-	// The number of nearest rows per query (`k`). 
+	// The number of nearest rows per query (`k`).
 	// At most STANDARD_VECTOR_SIZE (the rows of a query fit in one output chunk)
 	const idx_t limit;
 	// The query vector's column in the query rows.
