@@ -486,6 +486,267 @@ public:
 		return rowid_binding;
 	}
 
+	// Follows a key that reads `child` (e.g. the TopN key) through projections that only forward it (e.g. `ORDER BY d`
+	// over a subquery that computes d) to the projection that computes it, and returns that projection. `binding`
+	// becomes the key's binding in it. The forwarding projections stay above the search.
+	// Needed to support distance aliased in a subquery.
+	static optional_ptr<LogicalProjection> TryFindDistanceProjection(LogicalOperator &child, ColumnBinding &binding) {
+		if (child.type != LogicalOperatorType::LOGICAL_PROJECTION) {
+			// The child has to be a projection
+			return nullptr;
+		}
+		reference<LogicalProjection> distance_projection = child.Cast<LogicalProjection>();
+		while (binding.column_index < distance_projection.get().expressions.size() &&
+		       distance_projection.get().expressions[binding.column_index]->type == ExpressionType::BOUND_COLUMN_REF) {
+			auto &forwarding_projection = distance_projection.get();
+			binding = forwarding_projection.expressions[binding.column_index]->Cast<BoundColumnRefExpression>().binding;
+			if (forwarding_projection.children.size() != 1 ||
+			    forwarding_projection.children.front()->type != LogicalOperatorType::LOGICAL_PROJECTION) {
+				return nullptr;
+			}
+			distance_projection = forwarding_projection.children.front()->Cast<LogicalProjection>();
+			if (binding.table_index != distance_projection.get().table_index) {
+				return nullptr;
+			}
+		}
+		if (binding.column_index >= distance_projection.get().expressions.size()) {
+			return nullptr;
+		}
+		return distance_projection.get();
+	}
+
+	// Walks the chain of FILTER operators (the predicates DuckDB could not push into the table scan), projections
+	// (subqueries and views) and joins (IN lists and subqueries) from `top` down to the table scan it must end in.
+	// IsChainOperator lists which case each kind of operator supports. `chain` receives the operators from `top` down
+	// to the table scan (excluded), and `chain_filters_rows` whether they decide which rows pass: FILTER operators and
+	// joins do, forwarding projections do not. Returns the table scan's slot, or nullptr when the chain does not end in
+	// a table scan we can search.
+	static unique_ptr<LogicalOperator> *TryWalkChainToTableScan(unique_ptr<LogicalOperator> &top,
+	                                                            vector<reference<LogicalOperator>> &chain,
+	                                                            bool &chain_filters_rows) {
+		auto *get_ptr_ptr = &top;
+		while (IsChainOperator(**get_ptr_ptr)) {
+			chain_filters_rows |= (*get_ptr_ptr)->type != LogicalOperatorType::LOGICAL_PROJECTION;
+			chain.push_back(**get_ptr_ptr);
+			get_ptr_ptr = &(*get_ptr_ptr)->children.front();
+		}
+		if ((*get_ptr_ptr)->type != LogicalOperatorType::LOGICAL_GET) {
+			return nullptr;
+		}
+
+		auto &get = (*get_ptr_ptr)->Cast<LogicalGet>();
+		// Check if the get is a table scan
+		if (get.function.name != "seq_scan") {
+			return nullptr;
+		}
+
+		if (get.dynamic_filters && get.dynamic_filters->HasFilters()) {
+			// Cant push down!
+			return nullptr;
+		}
+
+		// We can only replace the scan if the table is a duck table
+		if (!get.GetTable()->IsDuckTable()) {
+			return nullptr;
+		}
+		return get_ptr_ptr;
+	}
+
+	// A distance function matched to an index of the scanned table.
+	struct IndexMatch {
+		optional_ptr<PDXearchIndex> index;
+		// The distance function's argument that holds the query vector.
+		optional_ptr<Expression> query_argument;
+		// When the indexed argument is a plain column: the embedding's binding as the distance function reads it, and
+		// its position in the table scan.
+		ColumnBinding embedding_binding;
+		optional_idx embedding_column_position;
+	};
+
+	// Finds an index of the table `get` scans that `distance_expression` can use: a distance function of the index's
+	// metric between the indexed expression, read through the chain (ordered from the top down to `get`), and an
+	// argument `is_query_argument` accepts as the query vector.
+	static bool TryMatchIndex(ClientContext &context, LogicalGet &get, const vector<reference<LogicalOperator>> &chain,
+	                          const unique_ptr<Expression> &distance_expression,
+	                          const std::function<bool(const Expression &)> &is_query_argument, IndexMatch &match) {
+		auto &table_info = *get.GetTable()->GetStorage().GetDataTableInfo();
+		vector<reference<Expression>> bindings;
+
+		table_info.BindIndexes(context, PDXearchIndex::TYPE_NAME);
+		for (auto &index : table_info.GetIndexes().Indexes()) {
+			if (!index.IsBound() || PDXearchIndex::TYPE_NAME != index.GetIndexType()) {
+				continue;
+			}
+			auto &cast_index = index.Cast<PDXearchIndex>();
+
+			// Reset the bindings
+			bindings.clear();
+
+			// Check that the projection expression is a distance function that matches the index
+			if (!cast_index.TryMatchDistanceFunction(distance_expression, bindings)) {
+				continue;
+			}
+			// Check that the PDXearch index actually indexes the expression
+			unique_ptr<Expression> index_expr;
+			if (!cast_index.TryBindIndexExpression(get, index_expr)) {
+				continue;
+			}
+
+			// Now, ensure that one of the bindings is the query vector, and the other our index expression
+			auto &query_expr_ref = bindings[1];
+			auto &index_expr_ref = bindings[2];
+
+			// The index expression is bound to the table scan, the argument reads it through the chain: compare the
+			// argument traced down to the table scan.
+			// Needed to support a renamed embedding column.
+			// (and every case with a projection between the distance and the scan).
+			const auto is_index_expression = [&](const Expression &argument) {
+				if (argument.type != ExpressionType::BOUND_COLUMN_REF) {
+					return index_expr->Equals(argument);
+				}
+				auto binding = argument.Cast<BoundColumnRefExpression>().binding;
+				return TryTraceToTableScan(chain, binding) &&
+				       index_expr->Equals(BoundColumnRefExpression(argument.return_type, binding));
+			};
+
+			if (!is_query_argument(query_expr_ref.get()) || !is_index_expression(index_expr_ref)) {
+				// Swap the bindings and try again
+				std::swap(query_expr_ref, index_expr_ref);
+				if (!is_query_argument(query_expr_ref.get()) || !is_index_expression(index_expr_ref)) {
+					// Nope, not a match, we can't optimize.
+					continue;
+				}
+			}
+			match.index = cast_index;
+			match.query_argument = query_expr_ref.get();
+			if (index_expr_ref.get().type == ExpressionType::BOUND_COLUMN_REF) {
+				match.embedding_binding = index_expr_ref.get().Cast<BoundColumnRefExpression>().binding;
+				auto traced_binding = match.embedding_binding;
+				TryTraceToTableScan(chain, traced_binding);
+				match.embedding_column_position = traced_binding.column_index;
+			}
+			return true;
+		}
+		// No index found
+		return false;
+	}
+
+	// Copies a constant query vector (a FLOAT array, or a BLOB of our encoding) into a float array of the index's
+	// dimension. nullptr when the BLOB's dimension differs from the index's.
+	static unsafe_unique_array<float> TryDecodeConstantQuery(const PDXearchIndex &index, const Value &query) {
+		const auto num_dimensions = index.GetNumDimensions();
+		auto query_embedding = make_unsafe_uniq_array<float>(num_dimensions);
+
+		if (query.type().id() == LogicalTypeId::BLOB) {
+			// BLOB path: decode the quantized blob to float array
+			auto blob = StringValue::Get(query);
+			auto blob_dims = BlobDimensionCount(blob.size());
+			if (blob_dims != num_dimensions) {
+				return nullptr;
+			}
+			DecodeBlobToFloatArray(const_data_ptr_cast(blob.data()), blob.size(), query_embedding.get());
+		} else {
+			// ARRAY path: existing logic
+			auto embedding_elements = ArrayValue::GetChildren(query);
+			for (idx_t i = 0; i < num_dimensions; i++) {
+				query_embedding[i] = embedding_elements[i].GetValue<float>();
+			}
+		}
+		return query_embedding;
+	}
+
+	// A join above this search may drop some of the K rows the search returns, but must not decide which K rows those
+	// are. DuckDB's join filter pushdown also hands the join's runtime filters to this table scan, through the TopN the
+	// search replaces, so the scan is detached from them. The join keeps its own reference and fills a filter set
+	// nothing reads. For example (other = {1, 3, 7, 11, 4474}):
+	//
+	//   SELECT id FROM (SELECT id FROM t WHERE id < 15000 ORDER BY array_distance(emb, q) LIMIT 10) s
+	//   WHERE s.id IN (SELECT x FROM other);
+	//
+	// keeps the rows of `other` among the 10 nearest rows with id < 15000 (only 4474). With the join's filters on the
+	// scan, the search would pick its neighbours among those five rows only and return all of them. The same IN inside
+	// the subquery (`WHERE id < 15000 AND id IN (SELECT x FROM other)`) is a predicate of the search: the joins inside
+	// the chain keep their runtime filters, moved to a filter set that only they fill.
+	static void DetachDynamicFilters(LogicalGet &get, const vector<reference<LogicalOperator>> &chain) {
+		auto chain_dynamic_filters = make_shared_ptr<DynamicTableFilterSet>();
+		for (auto &op : chain) {
+			if (op.get().type != LogicalOperatorType::LOGICAL_COMPARISON_JOIN) {
+				continue;
+			}
+			auto &join = op.get().Cast<LogicalComparisonJoin>();
+			if (!join.filter_pushdown || !get.dynamic_filters) {
+				continue;
+			}
+			for (auto &probe_filter : join.filter_pushdown->probe_info) {
+				if (probe_filter.dynamic_filters == get.dynamic_filters) {
+					probe_filter.dynamic_filters = chain_dynamic_filters;
+				}
+			}
+		}
+		get.dynamic_filters = std::move(chain_dynamic_filters);
+	}
+
+	// Builds the subtree that emits, as its only column, the rowid of every row that passes the table scan's
+	// pushed-down filters and the chain (ordered from the top down to the table scan), and returns it with that rowid's
+	// binding. `chain_top` and `get_ptr` are the slots of the chain's top operator and of the table scan; the subtree
+	// is moved out of them.
+	static unique_ptr<LogicalOperator>
+	BuildRowIdChild(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &chain_top,
+	                unique_ptr<LogicalOperator> &get_ptr, const vector<reference<LogicalOperator>> &chain,
+	                const bool chain_filters_rows, const IndexMatch &match, ColumnBinding &rowid_binding) {
+		auto &get = get_ptr->Cast<LogicalGet>();
+		if (!chain_filters_rows) {
+			// Scenario 2: Simple filtered search. The table scan has pushed down filters, possibly below projections
+			// that forward its columns, which the search replaces. The table scan becomes the child.
+
+			// Set the table scan's column_ids to include only those needed for the filters and the projected rowid
+			// column.
+			get.ClearColumnIds();
+			for (auto &filter_entry : get.table_filters.filters) {
+				get.AddColumnId(filter_entry.first);
+			}
+			// Add the rowid column (if it has not already been added because it is relied on by pushed-down filters).
+			idx_t rowid_pos = DConstants::INVALID_INDEX;
+			for (idx_t i = 0; i < get.GetColumnIds().size(); i++) {
+				if (get.GetColumnIds()[i].GetPrimaryIndex() == COLUMN_IDENTIFIER_ROW_ID) {
+					rowid_pos = i;
+					break;
+				}
+			}
+			if (rowid_pos == DConstants::INVALID_INDEX) {
+				get.AddColumnId(COLUMN_IDENTIFIER_ROW_ID);
+				rowid_pos = get.GetColumnIds().size() - 1;
+			}
+
+			// Set the projection to only include the rowid column.
+			get.projection_ids.clear();
+			get.projection_ids.push_back(rowid_pos);
+
+			// Re-resolve the get operator types after changing projection
+			get.ResolveOperatorTypes();
+
+			rowid_binding = ColumnBinding(get.table_index, rowid_pos);
+			return std::move(get_ptr);
+		}
+		// Scenario 3: Filtered search where FILTER operators or joins between the projection and the table scan hold
+		// (part of) the predicate, possibly mixed with projections that forward the table scan's columns. The table
+		// scan may have pushed-down filters as well.
+
+		// Make the rowid of every row that passes the predicate come out of the top of the chain.
+		const auto chain_rowid_binding =
+		    PassRowIdThroughChain(get, chain, match.embedding_binding, match.embedding_column_position);
+
+		// Keep only that rowid on top of the chain: the filtered search's sink takes a single rowid column.
+		vector<unique_ptr<Expression>> rowid_expressions;
+		rowid_expressions.push_back(make_uniq<BoundColumnRefExpression>(LogicalType::ROW_TYPE, chain_rowid_binding));
+		auto rowid_projection =
+		    make_uniq<LogicalProjection>(input.optimizer.binder.GenerateTableIndex(), std::move(rowid_expressions));
+		rowid_projection->children.push_back(std::move(chain_top));
+
+		rowid_binding = ColumnBinding(rowid_projection->table_index, 0);
+		return std::move(rowid_projection);
+	}
+
 	static bool TryOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
 		auto &context = input.context;
 		// Look for a TopN operator
@@ -522,175 +783,53 @@ public:
 		const auto &bound_column_ref = order.expression->Cast<BoundColumnRefExpression>();
 
 		// find the expression that is referenced
-		if (top_n.children.size() != 1 || top_n.children.front()->type != LogicalOperatorType::LOGICAL_PROJECTION) {
-			// The child has to be a projection
+		if (top_n.children.size() != 1) {
 			return false;
 		}
-
-		// Follow the TopN key through projections that only forward it (e.g. `ORDER BY d` over a subquery that computes
-		// d) to the projection that computes the distance. The forwarding projections stay above the search.
-		// Needed to support distance aliased in a subquery.
-		reference<LogicalProjection> distance_projection = top_n.children.front()->Cast<LogicalProjection>();
 		ColumnBinding distance_binding = bound_column_ref.binding;
-		while (distance_binding.column_index < distance_projection.get().expressions.size() &&
-		       distance_projection.get().expressions[distance_binding.column_index]->type ==
-		           ExpressionType::BOUND_COLUMN_REF) {
-			auto &forwarding_projection = distance_projection.get();
-			distance_binding = forwarding_projection.expressions[distance_binding.column_index]
-			                       ->Cast<BoundColumnRefExpression>()
-			                       .binding;
-			if (forwarding_projection.children.size() != 1 ||
-			    forwarding_projection.children.front()->type != LogicalOperatorType::LOGICAL_PROJECTION) {
-				return false;
-			}
-			distance_projection = forwarding_projection.children.front()->Cast<LogicalProjection>();
-			if (distance_binding.table_index != distance_projection.get().table_index) {
-				return false;
-			}
-		}
-		auto &projection = distance_projection.get();
-		if (distance_binding.column_index >= projection.expressions.size()) {
+		auto distance_projection = TryFindDistanceProjection(*top_n.children.front(), distance_binding);
+		if (!distance_projection) {
 			return false;
 		}
+		auto &projection = *distance_projection;
 
 		// This the expression that is referenced by the order by expression
 		const auto &projection_expr = projection.expressions[distance_binding.column_index];
 
-		// The projection must sit on top of a get, possibly with a chain of FILTER operators (the predicates DuckDB
-		// could not push into the table scan), projections (subqueries and views) and joins (IN lists and subqueries)
-		// in between. IsChainOperator lists which case each kind of operator supports.
+		// The projection must sit on top of a get, possibly with a chain of operators in between.
 		if (projection.children.size() != 1) {
 			return false;
 		}
 		vector<reference<LogicalOperator>> chain; // From the projection's child down to the table scan (excluded).
-		// Whether the chain decides which rows pass: FILTER operators and joins do, forwarding projections do not.
 		bool chain_filters_rows = false;
-		auto *get_ptr_ptr = &projection.children.front();
-		while (IsChainOperator(**get_ptr_ptr)) {
-			chain_filters_rows |= (*get_ptr_ptr)->type != LogicalOperatorType::LOGICAL_PROJECTION;
-			chain.push_back(**get_ptr_ptr);
-			get_ptr_ptr = &(*get_ptr_ptr)->children.front();
-		}
-		if ((*get_ptr_ptr)->type != LogicalOperatorType::LOGICAL_GET) {
-			return false;
-		}
-
-		auto &get_ptr = *get_ptr_ptr;
-		auto &get = get_ptr->Cast<LogicalGet>();
-		// Check if the get is a table scan
-		if (get.function.name != "seq_scan") {
-			return false;
-		}
-
-		if (get.dynamic_filters && get.dynamic_filters->HasFilters()) {
-			// Cant push down!
+		auto *get_ptr_ptr = TryWalkChainToTableScan(projection.children.front(), chain, chain_filters_rows);
+		if (!get_ptr_ptr) {
 			return false;
 		}
 
 		// We have a top-n operator on top of a table scan
 		// We can replace the function with a custom index scan (if the table has a custom index)
+		auto &get_ptr = *get_ptr_ptr;
+		auto &get = get_ptr->Cast<LogicalGet>();
+		auto &duck_table = get.GetTable()->Cast<DuckTableEntry>();
 
-		// Get the table
-		auto &table = *get.GetTable();
-		if (!table.IsDuckTable()) {
-			// We can only replace the scan if the table is a duck table
+		// Find the index: the projection expression is a distance function between our index expression and a constant
+		// query vector.
+		IndexMatch match;
+		const auto is_constant = [](const Expression &argument) {
+			return argument.type == ExpressionType::VALUE_CONSTANT;
+		};
+		if (!TryMatchIndex(context, get, chain, projection_expr, is_constant, match)) {
 			return false;
 		}
-
-		auto &duck_table = table.Cast<DuckTableEntry>();
-		auto &table_info = *table.GetStorage().GetDataTableInfo();
-
-		// Find the index
-		unique_ptr<PDXearchIndexScanBindData> bind_data = nullptr;
-		vector<reference<Expression>> bindings;
-		// When the index expression is a plain column: the embedding's binding as the projection reads it, and its
-		// position in the table scan.
-		ColumnBinding embedding_binding;
-		optional_idx embedding_column_position;
-
-		table_info.BindIndexes(context, PDXearchIndex::TYPE_NAME);
-		for (auto &index : table_info.GetIndexes().Indexes()) {
-			if (!index.IsBound() || PDXearchIndex::TYPE_NAME != index.GetIndexType()) {
-				continue;
-			}
-			auto &cast_index = index.Cast<PDXearchIndex>();
-
-			// Reset the bindings
-			bindings.clear();
-
-			// Check that the projection expression is a distance function that matches the index
-			if (!cast_index.TryMatchDistanceFunction(projection_expr, bindings)) {
-				continue;
-			}
-			// Check that the PDXearch index actually indexes the expression
-			unique_ptr<Expression> index_expr;
-			if (!cast_index.TryBindIndexExpression(get, index_expr)) {
-				continue;
-			}
-
-			// Now, ensure that one of the bindings is a constant vector, and the other our index expression
-			auto &const_expr_ref = bindings[1];
-			auto &index_expr_ref = bindings[2];
-
-			// The index expression is bound to the table scan, the argument reads it through the chain: compare the
-			// argument traced down to the table scan.
-			// Needed to support a renamed embedding column.
-			// (and every case with a projection between the distance and the scan).
-			const auto is_index_expression = [&](const Expression &argument) {
-				if (argument.type != ExpressionType::BOUND_COLUMN_REF) {
-					return index_expr->Equals(argument);
-				}
-				auto binding = argument.Cast<BoundColumnRefExpression>().binding;
-				return TryTraceToTableScan(chain, binding) &&
-				       index_expr->Equals(BoundColumnRefExpression(argument.return_type, binding));
-			};
-
-			if (const_expr_ref.get().type != ExpressionType::VALUE_CONSTANT || !is_index_expression(index_expr_ref)) {
-				// Swap the bindings and try again
-				std::swap(const_expr_ref, index_expr_ref);
-				if (const_expr_ref.get().type != ExpressionType::VALUE_CONSTANT ||
-				    !is_index_expression(index_expr_ref)) {
-					// Nope, not a match, we can't optimize.
-					continue;
-				}
-			}
-			if (index_expr_ref.get().type == ExpressionType::BOUND_COLUMN_REF) {
-				embedding_binding = index_expr_ref.get().Cast<BoundColumnRefExpression>().binding;
-				auto traced_binding = embedding_binding;
-				TryTraceToTableScan(chain, traced_binding);
-				embedding_column_position = traced_binding.column_index;
-			}
-
-			const auto num_dimensions = cast_index.GetNumDimensions();
-			const auto &matched_embedding = const_expr_ref.get().Cast<BoundConstantExpression>().value;
-			auto query_embedding = make_unsafe_uniq_array<float>(num_dimensions);
-
-			if (matched_embedding.type().id() == LogicalTypeId::BLOB) {
-				// BLOB path: decode the quantized blob to float array
-				auto blob = StringValue::Get(matched_embedding);
-				auto blob_dims = BlobDimensionCount(blob.size());
-				if (blob_dims != num_dimensions) {
-					return false;
-				}
-				DecodeBlobToFloatArray(const_data_ptr_cast(blob.data()), blob.size(), query_embedding.get());
-			} else {
-				// ARRAY path: existing logic
-				auto embedding_elements = ArrayValue::GetChildren(matched_embedding);
-				for (idx_t i = 0; i < num_dimensions; i++) {
-					query_embedding[i] = embedding_elements[i].GetValue<float>();
-				}
-			}
-
-			// With an OFFSET the TopN stays in the plan and skips the first `offset` of the rows we return.
-			bind_data = make_uniq<PDXearchIndexScanBindData>(duck_table, cast_index, top_n.limit + top_n.offset,
-			                                                 std::move(query_embedding));
-			break;
-		}
-
-		if (!bind_data) {
-			// No index found
+		auto query_embedding =
+		    TryDecodeConstantQuery(*match.index, match.query_argument->Cast<BoundConstantExpression>().value);
+		if (!query_embedding) {
 			return false;
 		}
+		// With an OFFSET the TopN stays in the plan and skips the first `offset` of the rows we return.
+		auto bind_data = make_uniq<PDXearchIndexScanBindData>(duck_table, *match.index, top_n.limit + top_n.offset,
+		                                                      std::move(query_embedding));
 
 		// The columns the index scan emits: those the projection reads. Checked before the plan is changed.
 		vector<ColumnBinding> output_bindings;
@@ -699,34 +838,7 @@ public:
 			return false;
 		}
 
-		// A join above this search may drop some of the K rows the search returns, but must not decide which K rows
-		// those are. DuckDB's join filter pushdown also hands the join's runtime filters to this table scan, through
-		// the TopN the search replaces, so the scan is detached from them. The join keeps its own reference and fills
-		// a filter set nothing reads. For example (other = {1, 3, 7, 11, 4474}):
-		//
-		//   SELECT id FROM (SELECT id FROM t WHERE id < 15000 ORDER BY array_distance(emb, q) LIMIT 10) s
-		//   WHERE s.id IN (SELECT x FROM other);
-		//
-		// keeps the rows of `other` among the 10 nearest rows with id < 15000 (only 4474). With the join's filters on
-		// the scan, the search would pick its neighbours among those five rows only and return all of them. The same
-		// IN inside the subquery (`WHERE id < 15000 AND id IN (SELECT x FROM other)`) is a predicate of the search:
-		// the joins inside the chain keep their runtime filters, moved to a filter set that only they fill.
-		auto chain_dynamic_filters = make_shared_ptr<DynamicTableFilterSet>();
-		for (auto &op : chain) {
-			if (op.get().type != LogicalOperatorType::LOGICAL_COMPARISON_JOIN) {
-				continue;
-			}
-			auto &join = op.get().Cast<LogicalComparisonJoin>();
-			if (!join.filter_pushdown || !get.dynamic_filters) {
-				continue;
-			}
-			for (auto &probe_filter : join.filter_pushdown->probe_info) {
-				if (probe_filter.dynamic_filters == get.dynamic_filters) {
-					probe_filter.dynamic_filters = chain_dynamic_filters;
-				}
-			}
-		}
-		get.dynamic_filters = std::move(chain_dynamic_filters);
+		DetachDynamicFilters(get, chain);
 
 		bool has_pushed_down_filters = !get.table_filters.filters.empty();
 
@@ -748,88 +860,21 @@ public:
 				plan = std::move(top_n.children[0]);
 			}
 			return true;
-		} else if (!chain_filters_rows) {
-			// Scenario 2: Simple filtered search.
-
-			// We have a top-n operator on top of a table scan that has pushed down filters, possibly below projections
-			// that forward its columns. The PDXearchIndexFilteredScan replaces those projections: it emits the columns
-			// the projection above reads (output_bindings), fetched by rowid. We do the following:
-			// The PDXearchIndexFilteredScan goes directly above the table scan, which the next steps change.
-
-			// Set the table scan's column_ids to include only those needed for the filters and the projected rowid
-			// column.
-			get.ClearColumnIds();
-			for (auto &filter_entry : get.table_filters.filters) {
-				get.AddColumnId(filter_entry.first);
-			}
-			// Add the rowid column (if it has not already been added because it is relied on by pushed-down filters).
-			idx_t rowid_pos = DConstants::INVALID_INDEX;
-			for (idx_t i = 0; i < get.GetColumnIds().size(); i++) {
-				if (get.GetColumnIds()[i].GetPrimaryIndex() == COLUMN_IDENTIFIER_ROW_ID) {
-					rowid_pos = i;
-					break;
-				}
-			}
-			if (rowid_pos == DConstants::INVALID_INDEX) {
-				get.AddColumnId(COLUMN_IDENTIFIER_ROW_ID);
-				rowid_pos = get.GetColumnIds().size() - 1;
-			}
-
-			// Set the projection to only include the rowid column.
-			get.projection_ids.clear();
-			get.projection_ids.push_back(rowid_pos);
-
-			// Re-resolve the get operator types after changing projection
-			get.ResolveOperatorTypes();
-
-			// Insert a PDXearchIndexFilteredScan operator above the table scan.
-			auto pdxearch_index_filtered_scan = make_uniq<LogicalPDXearchIndexFilteredScan>(
-			    duck_table, bind_data->index, bind_data->limit, std::move(bind_data->query_embedding),
-			    std::move(output_column_ids), std::move(output_bindings));
-			// Bind and push back only the row_id column that the table scan should emit
-			// The table scan is configured to only output the rowid column at index rowid_pos
-			auto row_id_column =
-			    make_uniq<BoundColumnRefExpression>(get.types[0], ColumnBinding(get.table_index, rowid_pos));
-			pdxearch_index_filtered_scan->expressions.push_back(std::move(row_id_column));
-
-			pdxearch_index_filtered_scan->children.push_back(std::move(get_ptr));
-			pdxearch_index_filtered_scan->ResolveOperatorTypes();
-
-			projection.children.clear();
-			projection.children.push_back(std::move(pdxearch_index_filtered_scan));
-			projection.estimated_cardinality = top_n.estimated_cardinality;
-			projection.ResolveOperatorTypes();
-
-			// 5. Remove the TopN operator, unless it has an OFFSET to apply.
-			if (top_n.offset == 0) {
-				plan = std::move(top_n.children[0]);
-			}
-			return true;
 		} else {
-			// Scenario 3: Filtered search where FILTER operators between the projection and the table scan hold (part
-			// of) the predicate, possibly mixed with projections that forward the table scan's columns. The table scan
-			// may have pushed-down filters as well.
+			// Scenarios 2 and 3: Filtered search. The PDXearchIndexFilteredScan emits the columns the projection reads
+			// (output_bindings), fetched by rowid, so the operators above it keep working unchanged. Its child emits
+			// the rowid of every row that passes the predicate.
+			ColumnBinding rowid_binding;
+			auto rowid_child = BuildRowIdChild(input, projection.children.front(), get_ptr, chain, chain_filters_rows,
+			                                   match, rowid_binding);
 
-			// The PDXearchIndexFilteredScan emits the columns the projection reads (output_bindings), fetched by
-			// rowid, so the operators above it keep working unchanged.
-
-			// Make the rowid of every row that passes the predicate come out of the top of the chain.
-			const auto rowid_binding = PassRowIdThroughChain(get, chain, embedding_binding, embedding_column_position);
-
-			// Keep only that rowid on top of the chain: the filtered search's sink takes a single rowid column.
-			vector<unique_ptr<Expression>> rowid_expressions;
-			rowid_expressions.push_back(make_uniq<BoundColumnRefExpression>(LogicalType::ROW_TYPE, rowid_binding));
-			auto rowid_projection =
-			    make_uniq<LogicalProjection>(input.optimizer.binder.GenerateTableIndex(), std::move(rowid_expressions));
-			rowid_projection->children.push_back(std::move(projection.children.front()));
-
-			// Insert a PDXearchIndexFilteredScan operator above the rowid projection.
+			// Insert a PDXearchIndexFilteredScan operator above the rowid child.
 			auto pdxearch_index_filtered_scan = make_uniq<LogicalPDXearchIndexFilteredScan>(
 			    duck_table, bind_data->index, bind_data->limit, std::move(bind_data->query_embedding),
 			    std::move(output_column_ids), std::move(output_bindings));
-			pdxearch_index_filtered_scan->expressions.push_back(make_uniq<BoundColumnRefExpression>(
-			    LogicalType::ROW_TYPE, ColumnBinding(rowid_projection->table_index, 0)));
-			pdxearch_index_filtered_scan->children.push_back(std::move(rowid_projection));
+			pdxearch_index_filtered_scan->expressions.push_back(
+			    make_uniq<BoundColumnRefExpression>(LogicalType::ROW_TYPE, rowid_binding));
+			pdxearch_index_filtered_scan->children.push_back(std::move(rowid_child));
 			pdxearch_index_filtered_scan->ResolveOperatorTypes();
 
 			projection.children.clear();
