@@ -1,0 +1,119 @@
+# name: test/sql/join_search/index_join_transactions.test
+# description: The index join sees the table as its transaction does, as the single-query index search does: rows
+#              the transaction deleted are not returned, and committed inserts are searched. join_result holds the
+#              LATERAL join's rows, single_result those of the single-query searches, and their difference (both ways,
+#              as multisets) must be empty.
+# group: [join_search]
+
+require parquet
+
+require pdxearch
+
+# Row groups of 8192 rows (4 in the table).
+statement ok
+ATTACH '__TEST_DIR__/index_join_transactions.db' AS index_join_transactions (ROW_GROUP_SIZE 8192);
+
+statement ok
+USE index_join_transactions;
+
+statement ok
+SET late_materialization_max_rows = 0;
+
+statement ok
+SET checkpoint_threshold = '10GB';
+
+# Variables
+test-env DIMS 128
+
+statement ok
+CREATE TABLE t AS SELECT id, (id % 10)::INTEGER AS cat, emb::FLOAT[${DIMS}] AS emb FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') WHERE id < 32768;
+
+statement ok
+CREATE TABLE q AS SELECT (id - 240000)::INTEGER AS qid, emb::FLOAT[${DIMS}] AS vec FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') WHERE id >= 240000 AND id < 240010;
+
+statement ok
+CREATE INDEX t_idx ON t USING PDXEARCH (emb) WITH (metric = 'l2sq', seed = 0);
+
+# ============================================
+# Deleting the nearest row of query 0 inside the transaction: it is still in the index, and the fetch skips it.
+# Unfiltered, query 0 then has 9 rows. Filtered, only visible rows pass, and query 0 has 10.
+# ============================================
+
+statement ok
+SET VARIABLE query_vector = (SELECT vec FROM q WHERE qid = 0);
+
+statement ok
+SET VARIABLE deleted_id = (SELECT id FROM t ORDER BY array_distance(emb, getvariable('query_vector')) LIMIT 1);
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t WHERE id = getvariable('deleted_id');
+
+statement ok
+CREATE OR REPLACE TABLE join_result AS SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+
+statement ok
+CREATE OR REPLACE TABLE single_result AS FROM join_result LIMIT 0;
+
+loop i 0 10
+
+statement ok
+SET VARIABLE query_vector = (SELECT vec FROM q WHERE qid = ${i});
+
+statement ok
+INSERT INTO single_result SELECT ${i}, id FROM t ORDER BY array_distance(emb, getvariable('query_vector')) LIMIT 10;
+
+endloop
+
+query II
+SELECT count(*), count(*) FILTER (WHERE id = getvariable('deleted_id')) FROM join_result;
+----
+99	0
+
+query I
+SELECT count(*) FROM ((FROM single_result EXCEPT ALL FROM join_result) UNION ALL (FROM join_result EXCEPT ALL FROM single_result));
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE join_result AS SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE t.id % 3 <> 5 ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+
+statement ok
+CREATE OR REPLACE TABLE single_result AS FROM join_result LIMIT 0;
+
+loop i 0 10
+
+statement ok
+SET VARIABLE query_vector = (SELECT vec FROM q WHERE qid = ${i});
+
+statement ok
+INSERT INTO single_result SELECT ${i}, id FROM t WHERE id % 3 <> 5 ORDER BY array_distance(emb, getvariable('query_vector')) LIMIT 10;
+
+endloop
+
+query II
+SELECT count(*), count(*) FILTER (WHERE id = getvariable('deleted_id')) FROM join_result;
+----
+100	0
+
+query I
+SELECT count(*) FROM ((FROM single_result EXCEPT ALL FROM join_result) UNION ALL (FROM join_result EXCEPT ALL FROM single_result));
+----
+0
+
+statement ok
+ROLLBACK;
+
+# ============================================
+# A committed insert: a copy of query 0's vector is its nearest row.
+# ============================================
+
+statement ok
+INSERT INTO t SELECT 100000, 0, vec FROM q WHERE qid = 0;
+
+query II
+SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t ORDER BY array_distance(t.emb, q.vec) LIMIT 1) s WHERE q.qid = 0;
+----
+0	100000

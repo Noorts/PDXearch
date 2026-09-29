@@ -147,6 +147,8 @@ public:
 
 	void VerifyAllocations(IndexLock &state) override;
 
+	void VerifyBuffers(IndexLock &state) override;
+
 	idx_t GetInMemorySize(IndexLock &state) override;
 
 	unique_ptr<PDXearchIndexStats> GetStats(const ClientContext &context) const;

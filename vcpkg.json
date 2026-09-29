@@ -3,6 +3,10 @@
                 "eigen3",
                 {
                         "name": "openblas",
+                        "features": [
+                                "threads",
+                                "dynamic-arch"
+                        ],
                         "platform": "!osx"
                 },
                 {

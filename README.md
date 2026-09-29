@@ -91,6 +91,14 @@ official VSS extension ([VSS docs](https://duckdb.org/docs/stable/core_extension
         ORDER BY array_distance(embedding, repeat([1000.51], 512)::FLOAT[512]) LIMIT 100;
     ```
 
+6. Or send bulk queries using a `LATERAL` join:
+
+    ```sql
+    SELECT q.id, s.id FROM queries q, LATERAL (
+        SELECT id FROM t1 WHERE id < 500
+        ORDER BY array_distance(embedding, q.embedding) LIMIT 100) s;
+    ```
+
 > [!WARNING]
 > If you're executing (filtered) search queries where `K <= 50`, then please
 > disable DuckDB's late materialization optimization by running the following
@@ -178,12 +186,15 @@ As mentioned above, we aim to address all of these limitations soon.
   the query slower than without the index. When DuckDB compresses the join key of
   a subquery join (subquery results of at least 1,048,576 rows; every subquery
   join in debug builds), searches that read that key, e.g. `SELECT id FROM t WHERE
-  id IN (SELECT ...)`, run without the index (TODO). You can check whether your query is
+  id IN (SELECT ...)`, run without the index, also in `LATERAL` joins (TODO). You can check whether your query is
   currently being optimized by prepending the `EXPLAIN` keyword to your search
   query and checking if a PDXearch operator is part of the query plan.
 
 - **Configuration options**: The available [configuration options](#configuration) are currently
   limited (e.g., quantization, distance functions, normalization).
+
+- **Maximum `k`**: In `LATERAL` joins, we only support a maximum `k` (`k + o` with an `OFFSET`) of
+  `STANDARD_VECTOR_SIZE` (default: 2048).
 
 - **Stability**
 

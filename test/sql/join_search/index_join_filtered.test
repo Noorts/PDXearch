@@ -1,0 +1,449 @@
+# name: test/sql/join_search/index_join_filtered.test
+# description: A LATERAL join whose KNN subquery filters the indexed table: the index join collects the rowids that
+#              pass the predicate once, then searches them for each query. The rows of each query equal those of the
+#              filtered single-query index search with that query vector as a constant (via getvariable). join_result
+#              holds the LATERAL join's rows, single_result those of the single-query searches, and their difference
+#              (both ways, as multisets) must be empty.
+# group: [join_search]
+
+require parquet
+
+require pdxearch
+
+# Row groups of 8192 rows (4 in the table).
+statement ok
+ATTACH '__TEST_DIR__/index_join_filtered.db' AS index_join_filtered (ROW_GROUP_SIZE 8192);
+
+statement ok
+USE index_join_filtered;
+
+statement ok
+SET late_materialization_max_rows = 0;
+
+statement ok
+SET checkpoint_threshold = '10GB';
+
+# Variables
+test-env DIMS 128
+
+statement ok
+CREATE TABLE t AS SELECT id, (id % 10)::INTEGER AS cat, emb::FLOAT[${DIMS}] AS emb FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') WHERE id < 32768;
+
+# The query rows: 10 SIFT vectors that are not in t.
+statement ok
+CREATE TABLE q AS SELECT (id - 240000)::INTEGER AS qid, emb::FLOAT[${DIMS}] AS vec FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') WHERE id >= 240000 AND id < 240010;
+
+# small is smaller than t, so DuckDB builds the hash table of the IN / EXISTS subqueries on small.
+statement ok
+CREATE TABLE small AS SELECT (range * 7)::BIGINT AS x FROM range(2000);
+
+statement ok
+CREATE VIEW v AS SELECT * FROM t WHERE id % 3 = 0 OR cat = 4;
+
+foreach quantization f32 u8
+
+statement ok
+DROP INDEX IF EXISTS t_idx;
+
+statement ok
+CREATE INDEX t_idx ON t USING PDXEARCH (emb) WITH (metric = 'l2sq', quantization = '${quantization}', seed = 0);
+
+foreach threads 1 4
+
+statement ok
+SET threads = ${threads};
+
+# The reference: the filtered single-query index search, inserted into single_result.
+statement ok
+SET VARIABLE query_vector = (SELECT vec FROM q WHERE qid = 0);
+
+statement ok
+CREATE OR REPLACE TABLE single_result (qid INTEGER, id INTEGER);
+
+query II
+EXPLAIN INSERT INTO single_result SELECT 0, id FROM t WHERE id % 7 = 0 OR cat = 3 ORDER BY array_distance(emb, getvariable('query_vector')) LIMIT 10;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*
+
+# ============================================
+# A filter pushed into the table scan: the scan below the index join emits the rowids that pass.
+# ============================================
+
+query II
+EXPLAIN SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE t.cat = 3 ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_JOIN.*DELIM_SCAN.*SEQ_SCAN.*
+
+statement ok
+CREATE OR REPLACE TABLE join_result AS SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE t.cat = 3 ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+
+statement ok
+CREATE OR REPLACE TABLE single_result AS FROM join_result LIMIT 0;
+
+loop i 0 10
+
+statement ok
+SET VARIABLE query_vector = (SELECT vec FROM q WHERE qid = ${i});
+
+statement ok
+INSERT INTO single_result SELECT ${i}, id FROM t WHERE cat = 3 ORDER BY array_distance(emb, getvariable('query_vector')) LIMIT 10;
+
+endloop
+
+query I
+SELECT count(*) FROM join_result;
+----
+100
+
+query I
+SELECT count(*) FROM ((FROM single_result EXCEPT ALL FROM join_result) UNION ALL (FROM join_result EXCEPT ALL FROM single_result));
+----
+0
+
+# ============================================
+# A residual filter over two columns: the FILTER stays below the index join.
+# ============================================
+
+query II
+EXPLAIN SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE t.id % 7 = 0 OR t.cat = 3 ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_JOIN.*FILTER.*SEQ_SCAN.*
+
+statement ok
+CREATE OR REPLACE TABLE join_result AS SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE t.id % 7 = 0 OR t.cat = 3 ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+
+statement ok
+CREATE OR REPLACE TABLE single_result AS FROM join_result LIMIT 0;
+
+loop i 0 10
+
+statement ok
+SET VARIABLE query_vector = (SELECT vec FROM q WHERE qid = ${i});
+
+statement ok
+INSERT INTO single_result SELECT ${i}, id FROM t WHERE id % 7 = 0 OR cat = 3 ORDER BY array_distance(emb, getvariable('query_vector')) LIMIT 10;
+
+endloop
+
+query I
+SELECT count(*) FROM join_result;
+----
+100
+
+query I
+SELECT count(*) FROM ((FROM single_result EXCEPT ALL FROM join_result) UNION ALL (FROM join_result EXCEPT ALL FROM single_result));
+----
+0
+
+# ============================================
+# An IN list of at least five constants inside a larger predicate: a MARK join below the index join.
+# ============================================
+
+query II
+EXPLAIN SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE t.cat = 3 OR t.id IN (1, 5, 9, 200, 4000, 30000) ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_JOIN.*MARK.*
+
+statement ok
+CREATE OR REPLACE TABLE join_result AS SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE t.cat = 3 OR t.id IN (1, 5, 9, 200, 4000, 30000) ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+
+statement ok
+CREATE OR REPLACE TABLE single_result AS FROM join_result LIMIT 0;
+
+loop i 0 10
+
+statement ok
+SET VARIABLE query_vector = (SELECT vec FROM q WHERE qid = ${i});
+
+statement ok
+INSERT INTO single_result SELECT ${i}, id FROM t WHERE cat = 3 OR id IN (1, 5, 9, 200, 4000, 30000) ORDER BY array_distance(emb, getvariable('query_vector')) LIMIT 10;
+
+endloop
+
+query I
+SELECT count(*) FROM join_result;
+----
+100
+
+query I
+SELECT count(*) FROM ((FROM single_result EXCEPT ALL FROM join_result) UNION ALL (FROM join_result EXCEPT ALL FROM single_result));
+----
+0
+
+# ============================================
+# Subqueries as filters: IN (a SEMI join), NOT EXISTS (an ANTI join) and NOT IN (a MARK join) below the index join.
+# Debug builds compress the key of every SEMI and ANTI join, and a search that reads the key (here id) then runs
+# without the index (see the README): the plan checks also accept that decompression.
+# ============================================
+
+query II
+EXPLAIN SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE t.id IN (SELECT x FROM small) ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+----
+physical_plan	<REGEX>:.*(PDXEARCH_INDEX_JOIN.*SEMI|__internal_decompress).*
+
+statement ok
+CREATE OR REPLACE TABLE join_result AS SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE t.id IN (SELECT x FROM small) ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+
+statement ok
+CREATE OR REPLACE TABLE single_result AS FROM join_result LIMIT 0;
+
+loop i 0 10
+
+statement ok
+SET VARIABLE query_vector = (SELECT vec FROM q WHERE qid = ${i});
+
+statement ok
+INSERT INTO single_result SELECT ${i}, id FROM t WHERE id IN (SELECT x FROM small) ORDER BY array_distance(emb, getvariable('query_vector')) LIMIT 10;
+
+endloop
+
+query I
+SELECT count(*) FROM join_result;
+----
+100
+
+query I
+SELECT count(*) FROM ((FROM single_result EXCEPT ALL FROM join_result) UNION ALL (FROM join_result EXCEPT ALL FROM single_result));
+----
+0
+
+query II
+EXPLAIN SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE NOT EXISTS (SELECT 1 FROM small WHERE small.x = t.id) ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+----
+physical_plan	<REGEX>:.*(PDXEARCH_INDEX_JOIN.*ANTI|__internal_decompress).*
+
+statement ok
+CREATE OR REPLACE TABLE join_result AS SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE NOT EXISTS (SELECT 1 FROM small WHERE small.x = t.id) ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+
+statement ok
+CREATE OR REPLACE TABLE single_result AS FROM join_result LIMIT 0;
+
+loop i 0 10
+
+statement ok
+SET VARIABLE query_vector = (SELECT vec FROM q WHERE qid = ${i});
+
+statement ok
+INSERT INTO single_result SELECT ${i}, id FROM t WHERE NOT EXISTS (SELECT 1 FROM small WHERE small.x = t.id) ORDER BY array_distance(emb, getvariable('query_vector')) LIMIT 10;
+
+endloop
+
+query I
+SELECT count(*) FROM join_result;
+----
+100
+
+query I
+SELECT count(*) FROM ((FROM single_result EXCEPT ALL FROM join_result) UNION ALL (FROM join_result EXCEPT ALL FROM single_result));
+----
+0
+
+query II
+EXPLAIN SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE t.id NOT IN (SELECT x FROM small) ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_JOIN.*MARK.*
+
+statement ok
+CREATE OR REPLACE TABLE join_result AS SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE t.id NOT IN (SELECT x FROM small) ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+
+statement ok
+CREATE OR REPLACE TABLE single_result AS FROM join_result LIMIT 0;
+
+loop i 0 10
+
+statement ok
+SET VARIABLE query_vector = (SELECT vec FROM q WHERE qid = ${i});
+
+statement ok
+INSERT INTO single_result SELECT ${i}, id FROM t WHERE id NOT IN (SELECT x FROM small) ORDER BY array_distance(emb, getvariable('query_vector')) LIMIT 10;
+
+endloop
+
+query I
+SELECT count(*) FROM join_result;
+----
+100
+
+query I
+SELECT count(*) FROM ((FROM single_result EXCEPT ALL FROM join_result) UNION ALL (FROM join_result EXCEPT ALL FROM single_result));
+----
+0
+
+# ============================================
+# A filter that reads the embedding: the table scan keeps the embedding and appends the rowid.
+# ============================================
+
+statement ok
+CREATE OR REPLACE TABLE join_result AS SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE t.emb[1] > 10 OR t.cat = 3 ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+
+statement ok
+CREATE OR REPLACE TABLE single_result AS FROM join_result LIMIT 0;
+
+loop i 0 10
+
+statement ok
+SET VARIABLE query_vector = (SELECT vec FROM q WHERE qid = ${i});
+
+statement ok
+INSERT INTO single_result SELECT ${i}, id FROM t WHERE emb[1] > 10 OR cat = 3 ORDER BY array_distance(emb, getvariable('query_vector')) LIMIT 10;
+
+endloop
+
+query I
+SELECT count(*) FROM join_result;
+----
+100
+
+query I
+SELECT count(*) FROM ((FROM single_result EXCEPT ALL FROM join_result) UNION ALL (FROM join_result EXCEPT ALL FROM single_result));
+----
+0
+
+# ============================================
+# A view with a residual filter, and a subquery with a pushed filter: their projections stay above the index join.
+# ============================================
+
+query II
+EXPLAIN SELECT q.qid, s.id FROM q, LATERAL (SELECT v.id FROM v ORDER BY array_distance(v.emb, q.vec) LIMIT 10) s;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_JOIN.*FILTER.*
+
+statement ok
+CREATE OR REPLACE TABLE join_result AS SELECT q.qid, s.id FROM q, LATERAL (SELECT v.id FROM v ORDER BY array_distance(v.emb, q.vec) LIMIT 10) s;
+
+statement ok
+CREATE OR REPLACE TABLE single_result AS FROM join_result LIMIT 0;
+
+loop i 0 10
+
+statement ok
+SET VARIABLE query_vector = (SELECT vec FROM q WHERE qid = ${i});
+
+statement ok
+INSERT INTO single_result SELECT ${i}, id FROM v ORDER BY array_distance(emb, getvariable('query_vector')) LIMIT 10;
+
+endloop
+
+query I
+SELECT count(*) FROM join_result;
+----
+100
+
+query I
+SELECT count(*) FROM ((FROM single_result EXCEPT ALL FROM join_result) UNION ALL (FROM join_result EXCEPT ALL FROM single_result));
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE join_result AS SELECT q.qid, s.id FROM q, LATERAL (SELECT sub.id FROM (SELECT * FROM t WHERE cat = 3) sub ORDER BY array_distance(sub.emb, q.vec) LIMIT 10) s;
+
+statement ok
+CREATE OR REPLACE TABLE single_result AS FROM join_result LIMIT 0;
+
+loop i 0 10
+
+statement ok
+SET VARIABLE query_vector = (SELECT vec FROM q WHERE qid = ${i});
+
+statement ok
+INSERT INTO single_result SELECT ${i}, id FROM (SELECT * FROM t WHERE cat = 3) sub ORDER BY array_distance(emb, getvariable('query_vector')) LIMIT 10;
+
+endloop
+
+query I
+SELECT count(*) FROM join_result;
+----
+100
+
+query I
+SELECT count(*) FROM ((FROM single_result EXCEPT ALL FROM join_result) UNION ALL (FROM join_result EXCEPT ALL FROM single_result));
+----
+0
+
+# ============================================
+# Fewer passing rows than K: every query gets all 7 of them.
+# ============================================
+
+query I
+SELECT count(*) FROM q, LATERAL (SELECT t.id FROM t WHERE t.id < 7 ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+----
+70
+
+# ============================================
+# No row passes: the inner LATERAL is empty, and a LEFT LATERAL pads every query row with NULLs.
+# ============================================
+
+query II
+EXPLAIN SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE t.id % 1000 = 1001 ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+----
+physical_plan	<REGEX>:.*PDXEARCH_INDEX_JOIN.*
+
+query I
+SELECT count(*) FROM q, LATERAL (SELECT t.id FROM t WHERE t.id % 1000 = 1001 ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s;
+----
+0
+
+query II
+SELECT count(*), count(s.id) FROM q LEFT JOIN LATERAL (SELECT t.id FROM t WHERE t.id % 1000 = 1001 ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s ON true;
+----
+10	0
+
+# ============================================
+# OFFSET with a filter (the FILTER on a ROW_NUMBER window), and a LEFT LATERAL with a filter.
+# ============================================
+
+statement ok
+CREATE OR REPLACE TABLE join_result AS SELECT q.qid, s.id FROM q, LATERAL (SELECT t.id FROM t WHERE t.cat = 3 ORDER BY array_distance(t.emb, q.vec) LIMIT 10 OFFSET 5) s;
+
+statement ok
+CREATE OR REPLACE TABLE single_result AS FROM join_result LIMIT 0;
+
+loop i 0 10
+
+statement ok
+SET VARIABLE query_vector = (SELECT vec FROM q WHERE qid = ${i});
+
+statement ok
+INSERT INTO single_result SELECT ${i}, id FROM t WHERE cat = 3 ORDER BY array_distance(emb, getvariable('query_vector')) LIMIT 10 OFFSET 5;
+
+endloop
+
+query I
+SELECT count(*) FROM join_result;
+----
+100
+
+query I
+SELECT count(*) FROM ((FROM single_result EXCEPT ALL FROM join_result) UNION ALL (FROM join_result EXCEPT ALL FROM single_result));
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE join_result AS SELECT q.qid, s.id FROM q LEFT JOIN LATERAL (SELECT t.id FROM t WHERE t.cat = 3 ORDER BY array_distance(t.emb, q.vec) LIMIT 10) s ON true;
+
+statement ok
+CREATE OR REPLACE TABLE single_result AS FROM join_result LIMIT 0;
+
+loop i 0 10
+
+statement ok
+SET VARIABLE query_vector = (SELECT vec FROM q WHERE qid = ${i});
+
+statement ok
+INSERT INTO single_result SELECT ${i}, id FROM t WHERE cat = 3 ORDER BY array_distance(emb, getvariable('query_vector')) LIMIT 10;
+
+endloop
+
+query I
+SELECT count(*) FROM join_result;
+----
+100
+
+query I
+SELECT count(*) FROM ((FROM single_result EXCEPT ALL FROM join_result) UNION ALL (FROM join_result EXCEPT ALL FROM single_result));
+----
+0
+
+endloop
+
+endloop
