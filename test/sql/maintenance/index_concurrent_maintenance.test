@@ -16,9 +16,6 @@ statement ok
 USE conc;
 
 statement ok
-SET late_materialization_max_rows = 0;
-
-statement ok
 SET checkpoint_threshold = '10GB';
 
 # Variables
@@ -44,9 +41,6 @@ concurrentloop threadid 0 8
 
 statement ok
 USE conc;
-
-statement ok
-SET late_materialization_max_rows = 0;
 
 statement ok
 INSERT INTO t1 SELECT * FROM sift WHERE id >= 8192 + 100 * ${threadid} AND id < 8192 + 100 * (${threadid} + 1);

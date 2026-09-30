@@ -14,6 +14,9 @@ namespace duckdb {
 // Generate a rotation matrix suitable for PDXearch's ADSampling pruning algorithm.
 //
 // Based on https://github.com/cwida/PDX/blob/main/python/pdxearch/preprocessors.py#L39
+//
+// TODO: Only worth it above 4096 dimensions: a blocked Householder QR on skmeans::Sgemm (LAPACK's sgeqrf + sorgqr)
+// builds the same matrix 4-8x faster than Eigen.
 [[nodiscard]] inline unique_ptr<float[]> GenerateRandomRotationMatrix(const size_t num_dimensions, const int32_t seed) {
 	auto rotation_matrix = make_uniq_array<float>(num_dimensions * num_dimensions);
 

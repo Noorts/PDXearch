@@ -5,9 +5,6 @@
 # TODO: Update this test to take dynamic n_probe into account. Need to decide on
 # the desired behavior and implement it first.
 
-statement ok
-SET late_materialization_max_rows = 0;
-
 require parquet
 
 require pdxearch

@@ -16,9 +16,6 @@ statement ok
 USE residual_filters;
 
 statement ok
-SET late_materialization_max_rows = 0;
-
-statement ok
 SET checkpoint_threshold = '10GB';
 
 # Variables
@@ -225,23 +222,19 @@ SELECT COUNT(*) FROM (SELECT id FROM t WHERE random() < 0.5 AND (id > 5 OR cat =
 ----
 10
 
-# ============================================
-# DuckDB's default late materialization setting.
-# ============================================
-
-statement ok
-RESET late_materialization_max_rows;
-
 query II
 EXPLAIN SELECT id FROM t WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
 ----
 physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*FILTER.*SEQ_SCAN.*
 
+# No late materialization (a second scan of t, joined on the rowid).
+query II
+EXPLAIN SELECT id FROM t WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<!REGEX>:.*rowid = rowid.*
+
 query I nosort or_two_columns_k10
 SELECT id FROM t WHERE id > 50 OR cat = 3 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
 ----
-
-statement ok
-SET late_materialization_max_rows = 0;
 
 endloop

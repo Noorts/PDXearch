@@ -14,6 +14,7 @@
 #include "duckdb/planner/operator/logical_delim_get.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
+#include "duckdb/planner/operator/logical_order.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_top_n.hpp"
 #include "duckdb/planner/operator/logical_window.hpp"
@@ -37,7 +38,8 @@ namespace duckdb {
  * matching PDXearch index.
  *
  * Note: this optimizer sets `optimize_function` and thus runs after DuckDB's
- * optimization passes.
+ * optimization passes. Its `pre_optimize_function` runs before them (see LATE
+ * MATERIALIZATION below).
  *
  ********************** SCENARIO 1 (non-filtered search): **********************
  *
@@ -315,6 +317,26 @@ namespace duckdb {
  * vectors computed from the query row, and the same top K written without
  * LATERAL (e.g. with QUALIFY) are not optimized.
  *
+ ***************************** LATE MATERIALIZATION: ***************************
+ *
+ * For a TopN of at most `late_materialization_max_rows` rows (default 50),
+ * DuckDB's late materialization reads only the order key and the rowid of
+ * every row to find the top K rows, then fetches their other columns with a
+ * second scan of the table joined on the rowid (a SEMI join), and sorts them
+ * again. This pays off when the other columns are wide. A search already works
+ * this way: the index finds the K rowids and the index scan fetches their
+ * columns, so on a search the rewrite only adds the second scan, the join and
+ * the sort (about twice as slow for K = 10).
+ *
+ * Therefore `pre_optimize_function` (PreOptimize) looks at the plan before
+ * DuckDB's optimizers run, finds each ORDER BY that TryOptimize will turn into
+ * a search (TryDisableLateMaterialization, the same checks up to the rewrite),
+ * and turns late materialization off for its table scan: the scan's copy of
+ * the table function has a `late_materialization` flag that DuckDB checks.
+ * Other scans, also of the same table, keep it. DuckDB copies a CTE that it
+ * inlines at several places by serializing it, which restores the flag, so a
+ * search inside such a CTE still gets the rewrite (correct, but slower).
+ *
  * TODO: Leave out the PROJECTION at the top? Our pattern recognition starts at
  * the TopN operator.
  * TODO: Fix cardinality of after-optimization plan (K instead of 1M?).
@@ -323,6 +345,7 @@ namespace duckdb {
 class PDXearchIndexScanOptimizer : public OptimizerExtension {
 public:
 	PDXearchIndexScanOptimizer() {
+		pre_optimize_function = PreOptimize;
 		optimize_function = Optimize;
 	}
 
@@ -545,6 +568,35 @@ public:
 			}
 		}
 		return rowid_binding;
+	}
+
+	// Whether `orders` (of a TopN, or of an ORDER BY before DuckDB's optimizers) is a single ascending key that puts
+	// NULLs last and reads a column of the operator's child. `binding` receives that column.
+	static bool TryMatchOrderKey(const vector<BoundOrderByNode> &orders, ColumnBinding &binding) {
+		if (orders.size() != 1) {
+			// We can only optimize if there is a single order by expression right now
+			return false;
+		}
+
+		const auto &order = orders[0];
+
+		if (order.type != OrderType::ASCENDING) {
+			// We can only optimize if the order by expression is ascending
+			return false;
+		}
+
+		if (order.null_order != OrderByNullType::NULLS_LAST) {
+			// Rows without an embedding have a NULL distance and are not in the index, so the index can only produce
+			// them last. The binder has already resolved an unspecified null order (default_null_order).
+			return false;
+		}
+
+		if (order.expression->type != ExpressionType::BOUND_COLUMN_REF) {
+			// The expression has to reference the child operator (a projection with the distance function)
+			return false;
+		}
+		binding = order.expression->Cast<BoundColumnRefExpression>().binding;
+		return true;
 	}
 
 	// Follows a key that reads `child` (e.g. the TopN key) through projections that only forward it (e.g. `ORDER BY d`
@@ -843,35 +895,15 @@ public:
 
 		auto &top_n = op.Cast<LogicalTopN>();
 
-		if (top_n.orders.size() != 1) {
-			// We can only optimize if there is a single order by expression right now
+		ColumnBinding distance_binding;
+		if (!TryMatchOrderKey(top_n.orders, distance_binding)) {
 			return false;
 		}
-
-		const auto &order = top_n.orders[0];
-
-		if (order.type != OrderType::ASCENDING) {
-			// We can only optimize if the order by expression is ascending
-			return false;
-		}
-
-		if (order.null_order != OrderByNullType::NULLS_LAST) {
-			// Rows without an embedding have a NULL distance and are not in the index, so the index can only produce
-			// them last. The binder has already resolved an unspecified null order (default_null_order).
-			return false;
-		}
-
-		if (order.expression->type != ExpressionType::BOUND_COLUMN_REF) {
-			// The expression has to reference the child operator (a projection with the distance function)
-			return false;
-		}
-		const auto &bound_column_ref = order.expression->Cast<BoundColumnRefExpression>();
 
 		// find the expression that is referenced
 		if (top_n.children.size() != 1) {
 			return false;
 		}
-		ColumnBinding distance_binding = bound_column_ref.binding;
 		auto distance_projection = TryFindDistanceProjection(*top_n.children.front(), distance_binding);
 		if (!distance_projection) {
 			return false;
@@ -973,6 +1005,49 @@ public:
 			}
 			return true;
 		}
+	}
+
+	// Runs before DuckDB's optimizers (see LATE MATERIALIZATION above): turns late materialization off for the table
+	// scan of an ORDER BY that TryOptimize will turn into a search, checked as TryOptimize does up to the rewrite. The
+	// constant query vector is not folded yet (e.g. a CAST of a list), so any foldable argument is accepted.
+	static bool TryDisableLateMaterialization(ClientContext &context, LogicalOperator &op) {
+		if (op.type != LogicalOperatorType::LOGICAL_ORDER_BY || op.children.size() != 1) {
+			return false;
+		}
+		ColumnBinding distance_binding;
+		if (!TryMatchOrderKey(op.Cast<LogicalOrder>().orders, distance_binding)) {
+			return false;
+		}
+		auto distance_projection = TryFindDistanceProjection(*op.children.front(), distance_binding);
+		if (!distance_projection || distance_projection->children.size() != 1) {
+			return false;
+		}
+		auto &projection = *distance_projection;
+
+		vector<reference<LogicalOperator>> chain; // From the projection's child down to the table scan (excluded).
+		bool chain_filters_rows = false;
+		auto *get_ptr_ptr = TryWalkChainToTableScan(projection.children.front(), chain, chain_filters_rows);
+		if (!get_ptr_ptr) {
+			return false;
+		}
+		auto &get = (*get_ptr_ptr)->Cast<LogicalGet>();
+
+		IndexMatch match;
+		const auto is_foldable = [](const Expression &argument) {
+			return argument.IsFoldable();
+		};
+		if (!TryMatchIndex(context, get, chain, projection.expressions[distance_binding.column_index], is_foldable,
+		                   match)) {
+			return false;
+		}
+		vector<ColumnBinding> output_bindings;
+		vector<ColumnIndex> output_column_ids;
+		if (!TryCollectOutputColumns(projection, chain, get, output_bindings, output_column_ids)) {
+			return false;
+		}
+
+		get.function.late_materialization = false;
+		return true;
 	}
 
 	// Finds the top K per query of a LATERAL join (scenario 4). DuckDB turns the `ORDER BY distance LIMIT K` of the
@@ -1296,6 +1371,13 @@ public:
 		}
 		for (auto &child : plan->children) {
 			MergeProjections(child);
+		}
+	}
+
+	static void PreOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
+		TryDisableLateMaterialization(input.context, *plan);
+		for (auto &child : plan->children) {
+			PreOptimize(input, child);
 		}
 	}
 

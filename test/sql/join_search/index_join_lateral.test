@@ -18,9 +18,6 @@ statement ok
 USE index_join_lateral;
 
 statement ok
-SET late_materialization_max_rows = 0;
-
-statement ok
 SET checkpoint_threshold = '10GB';
 
 # Variables
