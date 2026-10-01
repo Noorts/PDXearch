@@ -97,10 +97,6 @@ PhysicalOperator &PDXearchIndex::CreatePlan(PlanIndexInput &input) {
 
 	create_index.estimated_cardinality = input.table_scan.estimated_cardinality;
 
-	if (create_index.estimated_cardinality == 0) {
-		throw BinderException("PDXearch index cannot be created on an empty table.");
-	}
-
 	auto &projection =
 	    planner.Make<PhysicalProjection>(new_column_types, std::move(select_list), create_index.estimated_cardinality);
 	projection.children.push_back(input.table_scan);
