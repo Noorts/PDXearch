@@ -17,9 +17,6 @@ statement ok
 USE index_join_transactions;
 
 statement ok
-SET late_materialization_max_rows = 0;
-
-statement ok
 SET checkpoint_threshold = '10GB';
 
 # Variables

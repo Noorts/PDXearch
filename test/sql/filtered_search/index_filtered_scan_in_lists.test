@@ -16,9 +16,6 @@ statement ok
 USE in_lists;
 
 statement ok
-SET late_materialization_max_rows = 0;
-
-statement ok
 SET checkpoint_threshold = '10GB';
 
 # Variables
@@ -271,16 +268,19 @@ SELECT id, id IN (${IDS}) AS m FROM t_bf ORDER BY array_distance(emb, ${QUERY_EM
 ----
 
 # ============================================
-# DuckDB's default late materialization setting.
+# An IN list inside an OR, against brute force.
 # ============================================
-
-statement ok
-RESET late_materialization_max_rows;
 
 query II
 EXPLAIN SELECT id FROM t WHERE cat = 3 OR id IN (${IDS}) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
 ----
 physical_plan	<REGEX>:.*PDXEARCH_INDEX_FILT_SCAN.*
+
+# No late materialization (a second scan of t, joined on the rowid).
+query II
+EXPLAIN SELECT id FROM t WHERE cat = 3 OR id IN (${IDS}) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<!REGEX>:.*rowid = rowid.*
 
 query I nosort or_with_in_k10
 SELECT id FROM t WHERE cat = 3 OR id IN (${IDS}) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
@@ -289,8 +289,5 @@ SELECT id FROM t WHERE cat = 3 OR id IN (${IDS}) ORDER BY array_distance(emb, ${
 query I nosort or_with_in_k10
 SELECT id FROM t_bf WHERE cat = 3 OR id IN (${IDS}) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
 ----
-
-statement ok
-SET late_materialization_max_rows = 0;
 
 endloop

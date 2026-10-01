@@ -97,9 +97,6 @@ CREATE TABLE t2 (id INTEGER, emb FLOAT[${DIMS}]);
 statement ok
 INSERT INTO t2 FROM read_parquet('test/assets/sift-128-euclidean-245760.parquet') LIMIT ${NUM_ROWS};
 
-statement ok
-SET late_materialization_max_rows = 0;
-
 foreach metric_name,distance_func l2sq,array_distance cosine,array_cosine_distance
 
 statement ok

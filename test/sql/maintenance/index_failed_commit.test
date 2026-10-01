@@ -17,9 +17,6 @@ statement ok
 USE failed;
 
 statement ok
-SET late_materialization_max_rows = 0;
-
-statement ok
 SET checkpoint_threshold = '10GB';
 
 # Variables
@@ -35,14 +32,8 @@ CREATE TABLE sift AS SELECT id, emb::FLOAT[${DIMS}] AS emb FROM read_parquet('te
 statement ok con1
 USE failed;
 
-statement ok con1
-SET late_materialization_max_rows = 0;
-
 statement ok con2
 USE failed;
-
-statement ok con2
-SET late_materialization_max_rows = 0;
 
 foreach quantization f32
 

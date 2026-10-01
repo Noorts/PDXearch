@@ -16,9 +16,6 @@ test-env LIMIT 50
 
 test-env QUERY_EMB [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
 
-statement ok
-SET late_materialization_max_rows = 0;
-
 set seed 0.42
 
 statement ok

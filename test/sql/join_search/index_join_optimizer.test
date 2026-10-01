@@ -6,9 +6,6 @@ require parquet
 
 require pdxearch
 
-statement ok
-SET late_materialization_max_rows = 0;
-
 # Variables
 test-env DIMS 128
 

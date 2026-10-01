@@ -17,9 +17,6 @@ statement ok
 USE subqueries;
 
 statement ok
-SET late_materialization_max_rows = 0;
-
-statement ok
 SET checkpoint_threshold = '10GB';
 
 # Variables
@@ -217,18 +214,14 @@ EXPLAIN SELECT id FROM t WHERE id IN (SELECT x FROM small s WHERE s.g = t.cat % 
 ----
 physical_plan	<!REGEX>:.*PDXEARCH.*
 
-# ============================================
-# DuckDB's default late materialization setting (it does not rewrite plans with a join below the TopN).
-# ============================================
-
-statement ok
-RESET late_materialization_max_rows;
+# No late materialization (a second scan of t, joined on the rowid), next to the subquery's SEMI join.
+query II
+EXPLAIN SELECT id FROM t WHERE id IN (SELECT x FROM small) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<!REGEX>:.*rowid = rowid.*
 
 query I rowsort in_subquery_k10
 SELECT id FROM t WHERE id IN (SELECT x FROM small) ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
 ----
-
-statement ok
-SET late_materialization_max_rows = 0;
 
 endloop
