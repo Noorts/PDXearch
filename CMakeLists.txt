@@ -31,6 +31,11 @@ build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 target_link_libraries(${EXTENSION_NAME} $<BUILD_LOCAL_INTERFACE:PDX::PDX>)
 target_link_libraries(${LOADABLE_EXTENSION_NAME} PDX::PDX)
 
+if(NOT APPLE)
+  target_compile_definitions(${EXTENSION_NAME} PRIVATE PDXEARCH_USES_OPENBLAS)
+  target_compile_definitions(${LOADABLE_EXTENSION_NAME} PRIVATE PDXEARCH_USES_OPENBLAS)
+endif()
+
 install(
   TARGETS ${EXTENSION_NAME}
   EXPORT "${DUCKDB_EXPORT_SET}"

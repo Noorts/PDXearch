@@ -209,11 +209,10 @@ SourceResultType PhysicalPDXearchIndexScan::GetDataInternal(ExecutionContext &co
 	}
 	g_state.pdxearch_row_ids_idx += num_results_to_emit;
 
-	// Fetch the data from storage.
+	// Fetch the data (visible to the transaction) from storage.
 	auto &transaction = DuckTransaction::Get(context.client, bind_data->table.catalog);
 	bind_data->table.GetStorage().Fetch(transaction, output_chunk, g_state.column_ids, row_ids_vector,
 	                                    num_results_to_emit, g_state.fetch_state);
-	D_ASSERT(output_chunk.size() == num_results_to_emit);
 
 	return SourceResultType::HAVE_MORE_OUTPUT;
 }

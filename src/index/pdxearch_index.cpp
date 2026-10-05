@@ -437,6 +437,11 @@ void PDXearchIndex::VerifyAllocations(IndexLock &state) {
 	throw NotImplementedException("PDXearchIndex::VerifyAllocations() not implemented");
 }
 
+void PDXearchIndex::VerifyBuffers(IndexLock &state) {
+	// Needed for debug builds 
+	// TODO: Implement when we implement persistence
+}
+
 idx_t PDXearchIndex::GetInMemorySize(IndexLock &state) {
 	auto _lock = rwlock.GetSharedLock();
 
