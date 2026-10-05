@@ -142,6 +142,11 @@ public:
 			tasks.push_back(
 			    make_uniq<PDXearchScanSearchTask>(shared_from_this(), context, g_state, g_state.op, row_group_id));
 		}
+		if (tasks.empty()) {
+			// An index without row groups
+			Finish();
+			return;
+		}
 		SetTasks(std::move(tasks));
 	}
 

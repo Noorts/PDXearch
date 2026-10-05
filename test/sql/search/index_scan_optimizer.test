@@ -57,12 +57,6 @@ endloop
 # Index scan is used for low limits.
 # ============================================
 
-# TODO: Investigate optimizer materializationproblem when limit <= 50. Setting
-# this manually is a workaround.
-
-statement ok
-SET late_materialization_max_rows = 0;
-
 foreach metric_name,distance_func l2sq,array_distance cosine,array_cosine_distance
 
 statement ok
@@ -190,3 +184,47 @@ SELECT array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) FROM t1 ORDER BY array_
 155.94872
 218.88124
 245.28758
+
+# ============================================
+# DuckDB's late materialization (a TopN of at most 50 rows, whose other columns
+# a second scan fetches, joined on the rowid) is turned off for the table scan
+# of a search, and kept for every other TopN.
+# ============================================
+
+query II
+EXPLAIN SELECT * FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<!REGEX>:.*rowid = rowid.*
+
+query II
+EXPLAIN SELECT * FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10 OFFSET 5;
+----
+physical_plan	<!REGEX>:.*rowid = rowid.*
+
+query II
+EXPLAIN SELECT * FROM (SELECT id, emb, array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) AS d FROM t1) s ORDER BY d LIMIT 10;
+----
+physical_plan	<!REGEX>:.*rowid = rowid.*
+
+# Another order key, a descending order, and a distance the index does not serve.
+query II
+EXPLAIN SELECT * FROM t1 ORDER BY id LIMIT 10;
+----
+physical_plan	<REGEX>:.*HASH_JOIN.*rowid = rowid.*
+
+query II
+EXPLAIN SELECT * FROM t1 ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) DESC LIMIT 10;
+----
+physical_plan	<REGEX>:.*HASH_JOIN.*rowid = rowid.*
+
+query II
+EXPLAIN SELECT * FROM t1 ORDER BY array_cosine_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*HASH_JOIN.*rowid = rowid.*
+
+# A search that reads a value its subquery computes is not optimized on its own, but late materialization leaves only
+# the embedding and the rowid below the TopN, which the index scan then serves.
+query II
+EXPLAIN SELECT x FROM (SELECT id * 2 AS x, emb FROM t1) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<REGEX>:.*HASH_JOIN.*rowid = rowid.*PDXEARCH_INDEX_SCAN.*

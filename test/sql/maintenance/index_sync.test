@@ -16,9 +16,6 @@ statement ok
 USE sync;
 
 statement ok
-SET late_materialization_max_rows = 0;
-
-statement ok
 SET checkpoint_threshold = '10GB';
 
 # Variables

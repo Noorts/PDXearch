@@ -14,7 +14,7 @@
     - [Index Creation](#index-creation)
     - [Index Search](#index-search)
     - [Index Metadata](#index-metadata)
-- [Limitations](#limitations)
+- [Known Limitations](#known-limitations)
 - [Acknowledgements](#acknowledgements)
 - [License](#license)
 
@@ -99,15 +99,6 @@ official VSS extension ([VSS docs](https://duckdb.org/docs/stable/core_extension
         ORDER BY array_distance(embedding, q.embedding) LIMIT 100) s;
     ```
 
-> [!WARNING]
-> If you're executing (filtered) search queries where `K <= 50`, then please
-> disable DuckDB's late materialization optimization by running the following
-> statement prior to your search: `SET late_materialization_max_rows = 0;`. Due
-> to the query's low LIMIT (K), DuckDB will apply a late materialization
-> optimization. Unfortunately, the extension does not handle this case optimally
-> yet, leading to a suboptimal query plan when a `K <= 50` VSS query is
-> optimized. We aim to address this behavior in the near future.
-
 ### Configuration
 
 #### Index Creation
@@ -152,17 +143,14 @@ Execute `CALL pdxearch_index_info();` to print metadata about all PDXearch index
 
 Execute `FROM duckdb_indexes();` for general information about all indexes.
 
-## Limitations
-
-The extension's functionality is limited, as it is still in early development.
-As mentioned above, we aim to address all of these limitations soon.
+## Known Limitations
 
 - **No persistence**: The index should only be created in in-memory DuckDB
   databases. For disk-resident databases you'll have to manually drop and
   rebuild the index when you reload the database (to avoid loading a malformed
   index from storage).
 
-- **Limited concurrency**: Any number of KNN queries can search an index
+- **Concurrency**: Any number of KNN queries can search an index
   concurrently, but the maintenance operations exclude all searches while they
   run. `DELETE`s are applied to the index when the transaction commits.
   `INSERT`ed rows are indexed by the first search that runs after the commit
@@ -172,9 +160,8 @@ As mentioned above, we aim to address all of these limitations soon.
   row groups; when a checkpoint merges or drops row groups, the same first
   search rebuilds the affected part of the index from the table.
 
-- **Late materialization and filter types**: As noted above, we don't optimally
-  handle DuckDB's late materialization optimizer rule yet. Filtered searches
-  support any predicate on the indexed table's own columns that DuckDB evaluates
+- **Filter types**: Filtered searches support any predicate on the indexed 
+  table's own columns that DuckDB evaluates
   in the table scan or in filter operators directly above it (e.g. comparisons,
   `OR`s across columns, expressions over several columns, `IN` and `NOT IN` lists
   of constants, `IN` and `EXISTS` subqueries), also when the search runs over a
@@ -186,17 +173,17 @@ As mentioned above, we aim to address all of these limitations soon.
   the query slower than without the index. When DuckDB compresses the join key of
   a subquery join (subquery results of at least 1,048,576 rows; every subquery
   join in debug builds), searches that read that key, e.g. `SELECT id FROM t WHERE
-  id IN (SELECT ...)`, run without the index, also in `LATERAL` joins (TODO). You can check whether your query is
+  id IN (SELECT ...)`, run without the index, also in `LATERAL` joins (TODO). 
+  You can check whether your query is
   currently being optimized by prepending the `EXPLAIN` keyword to your search
   query and checking if a PDXearch operator is part of the query plan.
 
-- **Configuration options**: The available [configuration options](#configuration) are currently
-  limited (e.g., quantization, distance functions, normalization).
+- **Late materialization**: A search inside a CTE that DuckDB inlines at more
+  than one place (e.g. `NOT MATERIALIZED`) still gets DuckDB's late
+  materialization rewrite, which returns the same rows but is slower.
 
 - **Maximum `k`**: In `LATERAL` joins, we only support a maximum `k` (`k + o` with an `OFFSET`) of
   `STANDARD_VECTOR_SIZE` (default: 2048).
-
-- **Stability**
 
 ## Acknowledgements
 

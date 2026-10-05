@@ -40,10 +40,6 @@ endloop
 # used for simple filters.
 # ============================================
 
-# TODO: Investigate. Should this be required? See the HASH_JOIN check below.
-statement ok
-SET late_materialization_max_rows = 0;
-
 statement ok
 CREATE INDEX t1_idx ON t1 USING PDXEARCH (emb) WITH (seed = ${INDEX_SEED});
 

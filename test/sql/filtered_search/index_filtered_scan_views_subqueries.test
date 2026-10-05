@@ -16,9 +16,6 @@ statement ok
 USE views_subqueries;
 
 statement ok
-SET late_materialization_max_rows = 0;
-
-statement ok
 SET checkpoint_threshold = '10GB';
 
 # Variables
@@ -209,7 +206,7 @@ SELECT id, d FROM (SELECT id, array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) 
 ----
 
 # ============================================
-# Computed columns of a subquery: fine while the query does not read them; reading one keeps the brute-force plan.
+# Computed columns of a subquery: fine while the query does not read them.
 # ============================================
 
 query II
@@ -228,7 +225,7 @@ SELECT id FROM (SELECT id, id * 2 AS x, emb FROM t_bf WHERE cat = 3) s ORDER BY 
 query II
 EXPLAIN SELECT x FROM (SELECT id, id * 2 AS x, emb FROM t WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
 ----
-physical_plan	<!REGEX>:.*PDXEARCH.*
+physical_plan	<REGEX>:.*HASH_JOIN.*rowid = rowid.*PDXEARCH_INDEX_FILT_SCAN.*
 
 query I nosort read_computed_column
 SELECT x FROM (SELECT id, id * 2 AS x, emb FROM t WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
@@ -237,13 +234,6 @@ SELECT x FROM (SELECT id, id * 2 AS x, emb FROM t WHERE cat = 3) s ORDER BY arra
 query I nosort read_computed_column
 SELECT x FROM (SELECT id, id * 2 AS x, emb FROM t_bf WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
 ----
-
-# ============================================
-# DuckDB's default late materialization setting.
-# ============================================
-
-statement ok
-RESET late_materialization_max_rows;
 
 query II
 EXPLAIN SELECT id FROM (SELECT * FROM t WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
@@ -262,7 +252,15 @@ query I nosort view_with_filter
 SELECT id FROM v_filtered ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
 ----
 
-statement ok
-SET late_materialization_max_rows = 0;
+# No late materialization (a second scan of t, joined on the rowid).
+query II
+EXPLAIN SELECT id FROM (SELECT * FROM t WHERE cat = 3) s ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<!REGEX>:.*rowid = rowid.*
+
+query II
+EXPLAIN SELECT id FROM v_filtered ORDER BY array_distance(emb, ${QUERY_EMB}::FLOAT[${DIMS}]) LIMIT 10;
+----
+physical_plan	<!REGEX>:.*rowid = rowid.*
 
 endloop
